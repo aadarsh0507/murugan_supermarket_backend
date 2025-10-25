@@ -150,9 +150,7 @@ itemSchema.pre('save', function(next) {
 
 // Indexes for better performance
 itemSchema.index({ name: 1, isActive: 1 });
-itemSchema.index({ sku: 1 });
 itemSchema.index({ subcategory: 1, isActive: 1 });
-itemSchema.index({ barcode: 1 });
 itemSchema.index({ tags: 1 });
 itemSchema.index({ stock: 1 });
 itemSchema.index({ price: 1 });

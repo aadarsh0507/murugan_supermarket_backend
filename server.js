@@ -105,6 +105,24 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'Fresh Flow Store API Server',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      users: '/api/users',
+      categories: '/api/categories',
+      items: '/api/items',
+      bills: '/api/bills'
+    },
+    documentation: 'API documentation available at /api/health'
+  });
+});
+
 // 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({

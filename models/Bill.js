@@ -150,7 +150,6 @@ billSchema.virtual('billTime').get(function() {
 });
 
 // Indexes for better performance
-billSchema.index({ billNumber: 1 });
 billSchema.index({ createdAt: -1 });
 billSchema.index({ createdBy: 1 });
 billSchema.index({ status: 1 });
