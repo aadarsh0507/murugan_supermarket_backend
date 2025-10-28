@@ -127,6 +127,11 @@ router.post('/', protect, authorize('admin', 'manager'), createCategoryValidatio
 // @access  Private (Admin/Manager)
 router.get('/stats/overview', protect, authorize('admin', 'manager'), getCategoryStats);
 
+// @route   GET /api/categories/hierarchy
+// @desc    Get category hierarchy (tree structure)
+// @access  Private
+router.get('/hierarchy', protect, getCategoryHierarchy);
+
 // @route   GET /api/categories/:id
 // @desc    Get single category by ID
 // @access  Private
@@ -152,11 +157,6 @@ router.delete('/:id', protect, authorize('admin'), getCategoryValidation, delete
 // @desc    Get subcategories of a specific category
 // @access  Private
 router.get('/:id/subcategories', protect, getCategoryValidation, getSubcategories);
-
-// @route   GET /api/categories/hierarchy
-// @desc    Get category hierarchy (tree structure)
-// @access  Private
-router.get('/hierarchy', protect, getCategoryHierarchy);
 
 // @route   POST /api/categories/:id/subcategories
 // @desc    Add subcategory to existing category

@@ -17,6 +17,8 @@ import userRoutes from './routes/users.js';
 import categoryRoutes from './routes/categories.js';
 import itemRoutes from './routes/items.js';
 import billRoutes from './routes/bills.js';
+import supplierRoutes from './routes/suppliers.js';
+import purchaseOrderRoutes from './routes/purchaseOrders.js';
 
 // Load environment variables
 dotenv.config();
@@ -98,6 +100,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/bills', billRoutes);
+app.use('/api/suppliers', supplierRoutes);
+app.use('/api/purchase-orders', purchaseOrderRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -120,7 +124,9 @@ app.get('/', (req, res) => {
       users: '/api/users',
       categories: '/api/categories',
       items: '/api/items',
-      bills: '/api/bills'
+      bills: '/api/bills',
+      suppliers: '/api/suppliers',
+      purchaseOrders: '/api/purchase-orders'
     },
     documentation: 'API documentation available at /api/health'
   });
