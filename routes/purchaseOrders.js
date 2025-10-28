@@ -33,12 +33,20 @@ const createPurchaseOrderValidation = [
   body('items.*.costPrice')
     .isFloat({ min: 0 })
     .withMessage('Cost price must be a positive number'),
+  body('items.*.sku')
+    .optional({ checkFalsy: true })
+    .isString()
+    .withMessage('SKU must be a string'),
+  body('items.*.unit')
+    .optional({ checkFalsy: true })
+    .isString()
+    .withMessage('Unit must be a string'),
   body('orderDate')
     .optional()
     .isISO8601()
     .withMessage('Order date must be a valid date'),
   body('expectedDeliveryDate')
-    .optional()
+    .optional({ checkFalsy: true })
     .isISO8601()
     .withMessage('Expected delivery date must be a valid date')
 ];

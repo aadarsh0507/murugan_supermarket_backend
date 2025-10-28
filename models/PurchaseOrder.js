@@ -72,7 +72,8 @@ const purchaseOrderSchema = new mongoose.Schema({
   subtotal: {
     type: Number,
     default: 0,
-    min: 0
+    min: 0,
+    required: true
   },
   tax: {
     type: Number,
@@ -86,7 +87,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   total: {
     type: Number,
-    required: true,
+    default: 0,
     min: 0
   },
   shipping: {
@@ -151,13 +152,19 @@ purchaseOrderSchema.statics.generatePONumber = async function() {
 
 // Pre-save middleware to calculate totals
 purchaseOrderSchema.pre('save', function(next) {
-  if (this.items && this.items.length > 0) {
-    // Calculate subtotal
-    this.subtotal = this.items.reduce((sum, item) => sum + item.total, 0);
-  }
+  // Ensure numeric values exist
+  const subtotal = (this.items && this.items.length > 0) 
+    ? this.items.reduce((sum, item) => sum + (item.total || 0), 0)
+    : 0;
+  const tax = this.tax || 0;
+  const shipping = this.shipping || 0;
+  const discount = this.discount || 0;
+  
+  // Set subtotal
+  this.subtotal = subtotal;
   
   // Calculate total
-  this.total = this.subtotal + this.tax + this.shipping - this.discount;
+  this.total = subtotal + tax + shipping - discount;
   
   // Ensure total is not negative
   if (this.total < 0) {
