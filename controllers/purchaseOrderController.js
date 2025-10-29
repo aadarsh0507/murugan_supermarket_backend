@@ -14,7 +14,9 @@ export const getAllPurchaseOrders = async (req, res) => {
       search = '',
       status = '',
       supplierId = '',
-      storeId = ''
+      storeId = '',
+      startDate = '',
+      endDate = ''
     } = req.query;
 
     // Build query
@@ -34,6 +36,17 @@ export const getAllPurchaseOrders = async (req, res) => {
 
     if (storeId) {
       query.store = storeId;
+    }
+
+    // Date filtering
+    if (startDate || endDate) {
+      query.orderDate = {};
+      if (startDate) {
+        query.orderDate.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.orderDate.$lte = new Date(endDate + 'T23:59:59.999Z');
+      }
     }
 
     // Calculate pagination
@@ -135,6 +148,8 @@ export const createPurchaseOrder = async (req, res) => {
               sku: item.sku,
               categoryName: dbItem.subcategory?.parent?.name || item.categoryName,
               subcategoryName: dbItem.subcategory?.name || item.subcategoryName,
+              batchNumber: item.batchNumber || '',
+              hsnNumber: item.hsnNumber || '',
               quantity: item.quantity,
               unit: item.unit || dbItem.unit,
               costPrice: item.costPrice,
@@ -167,6 +182,8 @@ export const createPurchaseOrder = async (req, res) => {
                 sku: item.sku,
                 categoryName: foundCategory?.name || item.categoryName,
                 subcategoryName: foundSubcategory?.name || item.subcategoryName,
+                batchNumber: item.batchNumber || '',
+                hsnNumber: item.hsnNumber || '',
                 quantity: item.quantity,
                 unit: item.unit || foundItem.unit,
                 costPrice: item.costPrice,
@@ -181,6 +198,8 @@ export const createPurchaseOrder = async (req, res) => {
                 sku: item.sku || '',
                 categoryName: item.categoryName || '',
                 subcategoryName: item.subcategoryName || '',
+                batchNumber: item.batchNumber || '',
+                hsnNumber: item.hsnNumber || '',
                 quantity: item.quantity,
                 unit: item.unit || '',
                 costPrice: item.costPrice,
@@ -196,6 +215,8 @@ export const createPurchaseOrder = async (req, res) => {
             sku: '',
             categoryName: item.categoryName || '',
             subcategoryName: item.subcategoryName || '',
+            batchNumber: item.batchNumber || '',
+            hsnNumber: item.hsnNumber || '',
             quantity: item.quantity,
             unit: item.unit || '',
             costPrice: item.costPrice,
@@ -219,34 +240,105 @@ export const createPurchaseOrder = async (req, res) => {
     const purchaseOrder = new PurchaseOrder(purchaseOrderData);
     await purchaseOrder.save();
 
-    // Update stock for each item in the purchase order
+    // Create batches for each item in the purchase order and update stock
     for (const poItem of purchaseOrder.items) {
       if (poItem.sku) {
-        // Try to update stock in standalone Item model first
+        // Try to update standalone Item model first
         const dbItem = await Item.findOne({ sku: poItem.sku });
         
         if (dbItem) {
+          // If batch number is provided, create/update batch
+          if (poItem.batchNumber) {
+            if (!dbItem.batches) {
+              dbItem.batches = [];
+            }
+            
+            const existingBatchIndex = dbItem.batches.findIndex(batch => batch.batchNumber === poItem.batchNumber);
+            
+            if (existingBatchIndex !== -1) {
+              dbItem.batches[existingBatchIndex].quantity = (dbItem.batches[existingBatchIndex].quantity || 0) + poItem.quantity;
+              if (poItem.costPrice) {
+                dbItem.batches[existingBatchIndex].costPrice = poItem.costPrice;
+              }
+            } else {
+              dbItem.batches.push({
+                batchNumber: poItem.batchNumber,
+                hsnNumber: poItem.hsnNumber || '',
+                quantity: poItem.quantity,
+                costPrice: poItem.costPrice,
+                purchaseOrderNumber: purchaseOrder.poNumber,
+                purchaseDate: new Date(),
+                isActive: true,
+                createdBy: req.user.id
+              });
+            }
+          }
+          
           dbItem.stock = (dbItem.stock || 0) + poItem.quantity;
           if (poItem.costPrice) {
-            dbItem.cost = poItem.costPrice; // Update cost with PO cost
+            dbItem.cost = poItem.costPrice;
+          }
+          if (poItem.hsnNumber && !dbItem.hsnCode) {
+            dbItem.hsnCode = poItem.hsnNumber;
           }
           await dbItem.save();
         }
         
-        // Also update embedded items in categories
+        // Find and update embedded items in categories
         const categories = await Category.find({});
         
         for (const category of categories) {
           for (const subcategory of category.subcategories) {
-            for (const item of subcategory.items) {
-              if (item.sku === poItem.sku) {
-                item.stock = (item.stock || 0) + poItem.quantity;
-                if (poItem.costPrice) {
-                  item.cost = poItem.costPrice; // Update cost with PO cost
+            const itemIndex = subcategory.items.findIndex(item => item.sku === poItem.sku);
+            if (itemIndex !== -1) {
+              const item = subcategory.items[itemIndex];
+              
+              // If batch number is provided, create/update batch
+              if (poItem.batchNumber) {
+                // Initialize batches array if it doesn't exist
+                if (!item.batches) {
+                  item.batches = [];
                 }
-                await category.save();
-                break;
+                
+                // Check if batch already exists
+                const existingBatchIndex = item.batches.findIndex(batch => batch.batchNumber === poItem.batchNumber);
+                
+                if (existingBatchIndex !== -1) {
+                  // Update existing batch quantity instead of creating new one
+                  item.batches[existingBatchIndex].quantity = (item.batches[existingBatchIndex].quantity || 0) + poItem.quantity;
+                  if (poItem.costPrice) {
+                    item.batches[existingBatchIndex].costPrice = poItem.costPrice;
+                  }
+                } else {
+                  // Create new batch for this item
+                  item.batches.push({
+                    batchNumber: poItem.batchNumber,
+                    hsnNumber: poItem.hsnNumber || '',
+                    quantity: poItem.quantity,
+                    costPrice: poItem.costPrice,
+                    purchaseOrderNumber: purchaseOrder.poNumber,
+                    purchaseDate: new Date(),
+                    isActive: true,
+                    createdBy: req.user.id
+                  });
+                }
               }
+              
+              // Update item cost with latest PO cost if provided
+              if (poItem.costPrice) {
+                item.cost = poItem.costPrice;
+              }
+              
+              // Update HSN code if provided
+              if (poItem.hsnNumber && !item.hsnCode) {
+                item.hsnCode = poItem.hsnNumber;
+              }
+              
+              // Update stock field (always update stock regardless of batch number)
+              item.stock = (item.stock || 0) + poItem.quantity;
+              
+              await category.save();
+              break;
             }
           }
         }
@@ -262,7 +354,7 @@ export const createPurchaseOrder = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Purchase order created successfully and stock updated',
+      message: 'Purchase order created successfully, batches added and stock updated',
       data: purchaseOrder
     });
   } catch (error) {

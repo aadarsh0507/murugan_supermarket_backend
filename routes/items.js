@@ -10,6 +10,7 @@ import {
   getItemStats,
   getLowStockItems,
   getItemsBySubcategory,
+  getStockWithBatches,
   serveItemImage
 } from '../controllers/itemController.js';
 import { protect, authorize } from '../middleware/auth.js';
@@ -262,6 +263,11 @@ router.get('/stats/overview', protect, authorize('admin', 'manager'), getItemSta
 // @desc    Get low stock items
 // @access  Private
 router.get('/low-stock', protect, getLowStockItems);
+
+// @route   GET /api/items/stock-with-batches
+// @desc    Get stock with batch numbers
+// @access  Private
+router.get('/stock-with-batches', protect, getStockWithBatches);
 
 // @route   GET /api/items/subcategory/:id
 // @desc    Get items by subcategory

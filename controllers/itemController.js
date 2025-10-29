@@ -137,7 +137,18 @@ export const getAllItems = async (req, res) => {
 // @access  Private
 export const getItemById = async (req, res) => {
   try {
-    const item = await Item.findById(req.params.id)
+    const { id } = req.params;
+    
+    // Check if the ID is a valid MongoDB ObjectId
+    // This helps catch cases where routes like /stock-with-batches might be incorrectly matched
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found'
+      });
+    }
+
+    const item = await Item.findById(id)
       .populate('subcategory', 'name level parent')
       .populate('createdBy', 'firstName lastName')
       .populate('updatedBy', 'firstName lastName');
@@ -605,6 +616,176 @@ export const getItemStats = async (req, res) => {
   }
 };
 
+// @desc    Get stock with batch numbers
+// @route   GET /api/items/stock-with-batches
+// @access  Private
+export const getStockWithBatches = async (req, res) => {
+  try {
+    const { sku = '', search = '', categoryId = '' } = req.query;
+
+    // Get all items from standalone Item model
+    const query = {};
+    if (sku) {
+      query.sku = { $regex: sku, $options: 'i' };
+    }
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { sku: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const standaloneItems = await Item.find(query)
+      .populate('subcategory', 'name')
+      .select('name sku subcategory batches stock cost hsnCode');
+
+    // Get all items from embedded categories
+    const categoryQuery = {};
+    if (categoryId) {
+      categoryQuery._id = categoryId;
+    }
+
+    const categories = await Category.find(categoryQuery);
+    const embeddedItems = [];
+
+    categories.forEach(category => {
+      category.subcategories.forEach(subcategory => {
+        subcategory.items.forEach(item => {
+          if (!sku || item.sku.toLowerCase().includes(sku.toLowerCase())) {
+            if (!search || 
+                item.name.toLowerCase().includes(search.toLowerCase()) ||
+                item.sku.toLowerCase().includes(search.toLowerCase())) {
+              embeddedItems.push({
+                ...item.toObject(),
+                categoryName: category.name,
+                subcategoryName: subcategory.name,
+                source: 'embedded'
+              });
+            }
+          }
+        });
+      });
+    });
+
+    // Format standalone items
+    const standaloneFormatted = standaloneItems.flatMap(item => {
+      const itemData = {
+        itemName: item.name,
+        sku: item.sku,
+        categoryName: item.subcategory?.name || 'N/A',
+        subcategoryName: 'N/A', // Standalone items don't have separate subcategories
+        totalStock: item.stock || 0,
+        batches: item.batches || [],
+        source: 'standalone'
+      };
+
+      // If no batches, return item with empty batch array
+      if (!item.batches || item.batches.length === 0) {
+        return [{
+          ...itemData,
+          batchNumber: 'N/A',
+          batchQuantity: item.stock || 0,
+          purchaseOrderNumber: 'N/A',
+          purchaseDate: null,
+          costPrice: item.cost || 0,
+          hsnNumber: item.hsnCode || 'N/A',
+          expiryDate: null
+        }];
+      }
+
+      // Return one row per batch
+      return item.batches.filter(batch => batch.isActive).map(batch => ({
+        ...itemData,
+        batchNumber: batch.batchNumber || 'N/A',
+        batchQuantity: batch.quantity || 0,
+        purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
+        purchaseDate: batch.purchaseDate || null,
+        costPrice: batch.costPrice || 0,
+        hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
+        expiryDate: batch.expiryDate || null
+      }));
+    });
+
+    // Format embedded items
+    const embeddedFormatted = embeddedItems.flatMap(item => {
+      const itemData = {
+        itemName: item.name,
+        sku: item.sku,
+        categoryName: item.categoryName || 'N/A',
+        subcategoryName: item.subcategoryName || 'N/A',
+        totalStock: item.stock || 0,
+        batches: item.batches || [],
+        source: 'embedded'
+      };
+
+      // If no batches, return item with empty batch array
+      if (!item.batches || item.batches.length === 0) {
+        return [{
+          ...itemData,
+          batchNumber: 'N/A',
+          batchQuantity: item.stock || 0,
+          purchaseOrderNumber: 'N/A',
+          purchaseDate: null,
+          costPrice: item.cost || 0,
+          hsnNumber: item.hsnCode || 'N/A',
+          expiryDate: null
+        }];
+      }
+
+      // Return one row per batch
+      return item.batches.filter(batch => batch.isActive).map(batch => ({
+        ...itemData,
+        batchNumber: batch.batchNumber || 'N/A',
+        batchQuantity: batch.quantity || 0,
+        purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
+        purchaseDate: batch.purchaseDate || null,
+        costPrice: batch.costPrice || 0,
+        hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
+        expiryDate: batch.expiryDate || null
+      }));
+    });
+
+    // Combine and sort
+    const allStockData = [...standaloneFormatted, ...embeddedFormatted].sort((a, b) => {
+      // Sort by item name, then by batch number
+      if (a.itemName !== b.itemName) {
+        return a.itemName.localeCompare(b.itemName);
+      }
+      return (a.batchNumber || '').localeCompare(b.batchNumber || '');
+    });
+
+    res.json({
+      success: true,
+      data: allStockData
+    });
+  } catch (error) {
+    console.error('Error fetching stock with batches:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching stock with batches',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Helper function to get MIME type from file extension
+const getMimeType = (filename) => {
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.bmp': 'image/bmp',
+    '.ico': 'image/x-icon',
+    '.tiff': 'image/tiff',
+    '.tif': 'image/tiff'
+  };
+  return mimeTypes[ext] || 'image/jpeg'; // Default to jpeg if unknown
+};
+
 // @desc    Serve item images
 // @route   GET /api/items/image/:filename
 // @access  Public
@@ -637,8 +818,12 @@ export const serveItemImage = async (req, res) => {
     
     console.log('serveItemImage - File found, serving:', filename);
     
+    // Get appropriate MIME type based on file extension
+    const mimeType = getMimeType(filename);
+    console.log('serveItemImage - MIME type:', mimeType);
+    
     // Set appropriate headers
-    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Type', mimeType);
     res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
     
     // Send the file

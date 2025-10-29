@@ -12,6 +12,14 @@ const purchaseOrderItemSchema = new mongoose.Schema({
   },
   categoryName: String,
   subcategoryName: String,
+  batchNumber: {
+    type: String,
+    trim: true
+  },
+  hsnNumber: {
+    type: String,
+    trim: true
+  },
   quantity: {
     type: Number,
     required: true,
@@ -34,6 +42,9 @@ const purchaseOrderItemSchema = new mongoose.Schema({
   notes: {
     type: String,
     trim: true
+  },
+  expiryDate: {
+    type: Date
   }
 }, { _id: true });
 
@@ -65,7 +76,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ['pending', 'partially_received', 'completed', 'cancelled'],
-    default: 'pending',
+    default: 'completed',
     index: true
   },
   items: [purchaseOrderItemSchema],

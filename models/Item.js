@@ -1,5 +1,47 @@
 import mongoose from 'mongoose';
 
+// Batch schema for tracking individual batches
+const batchSchema = new mongoose.Schema({
+  batchNumber: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  hsnNumber: {
+    type: String,
+    trim: true
+  },
+  quantity: {
+    type: Number,
+    required: true,
+    min: [0, 'Quantity cannot be negative']
+  },
+  costPrice: {
+    type: Number,
+    min: [0, 'Cost price cannot be negative']
+  },
+  purchaseOrderNumber: {
+    type: String,
+    trim: true
+  },
+  purchaseDate: {
+    type: Date,
+    default: Date.now
+  },
+  expiryDate: {
+    type: Date
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  }
+}, { timestamps: true });
+
 const itemSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -15,6 +57,10 @@ const itemSchema = new mongoose.Schema({
     trim: true,
     uppercase: true,
     maxlength: [50, 'SKU cannot exceed 50 characters']
+  },
+  hsnCode: {
+    type: String,
+    trim: true
   },
   description: {
     type: String,
@@ -104,11 +150,21 @@ const itemSchema = new mongoose.Schema({
   updatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
-  }
+  },
+  batches: [batchSchema]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
+});
+
+// Virtual to calculate total stock from batches
+itemSchema.virtual('calculatedStock').get(function() {
+  return this.batches
+    ? this.batches
+        .filter(batch => batch.isActive)
+        .reduce((sum, batch) => sum + (batch.quantity || 0), 0)
+    : 0;
 });
 
 // Virtual for category path
