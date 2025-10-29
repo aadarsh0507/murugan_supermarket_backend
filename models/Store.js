@@ -5,8 +5,7 @@ const storeSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Store name is required'],
     trim: true,
-    maxlength: [100, 'Store name cannot exceed 100 characters'],
-    index: true
+    maxlength: [100, 'Store name cannot exceed 100 characters']
   },
   code: {
     type: String,
@@ -75,11 +74,10 @@ const storeSchema = new mongoose.Schema({
 
 // Indexes for better performance
 storeSchema.index({ name: 1, isActive: 1 });
-storeSchema.index({ code: 1 });
 storeSchema.index({ isActive: 1 });
 
 // Static method to find active stores
-storeSchema.statics.findActiveStores = function() {
+storeSchema.statics.findActiveStores = function () {
   return this.find({ isActive: true });
 };
 
