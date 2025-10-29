@@ -1,0 +1,5 @@
+companyName,contactPerson,email,primaryPhone,secondaryPhone,street,city,state,zipCode,country,designation,gstNumber,panNumber,accountNumber,bankName,branch,ifscCode,creditLimit,paymentTerms,isActive,notes
+Company A,John Doe,john@companya.com,1234567890,9876543210,123 Main St,New York,NY,10001,USA,Sales Manager,12ABCDE1234F1Z5,ABCDE1234F,123456789,ABC Bank,Main Branch,ABCD0123456,50000,Net 30,true,Regular supplier since 2020
+Company B,Jane Smith,jane@companyb.com,1234567891,,456 Market St,Los Angeles,CA,90001,USA,CEO,,ABCDE5678G,987654321,XYZ Bank,Central Branch,XYZ9876543,75000,Net 60,true,Preferred vendor
+Company C,Bob Johnson,bob@companyc.com,1234567892,,789 Oak Ave,Chicago,IL,60601,USA,Operations Head,12FGHIJ5678K2Z6,FGHIJ5678K,,DEF Bank,North Branch,DEF3456789,30000,COD,true,Bulk discount available
+
