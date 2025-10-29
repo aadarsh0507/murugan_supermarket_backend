@@ -161,12 +161,13 @@ const supplierSchema = new mongoose.Schema({
 
 // Virtual for contact person full name
 supplierSchema.virtual('contactPerson.fullName').get(function() {
-  return `${this.contactPerson.firstName} ${this.contactPerson.lastName || ''}`.trim();
+  if (!this.contactPerson) return '';
+  return `${this.contactPerson.firstName || ''} ${this.contactPerson.lastName || ''}`.trim();
 });
 
 // Virtual for active stores count
 supplierSchema.virtual('activeStoresCount').get(function() {
-  return this.stores.filter(s => s.isActive).length;
+  return this.stores ? this.stores.filter(s => s.isActive).length : 0;
 });
 
 // Indexes for better performance

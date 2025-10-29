@@ -1,5 +1,6 @@
 import PurchaseOrder from '../models/PurchaseOrder.js';
 import Category from '../models/Category.js';
+import Item from '../models/Item.js';
 import { validationResult } from 'express-validator';
 
 // @desc    Get all purchase orders
@@ -118,17 +119,139 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
 
+    // Validate and enrich items with SKU information
+    const enrichedItems = [];
+    if (req.body.items && req.body.items.length > 0) {
+      for (const item of req.body.items) {
+        // If SKU is provided, try to find and validate the item
+        if (item.sku) {
+          // First try to find in standalone Item model
+          const dbItem = await Item.findOne({ sku: item.sku }).populate('subcategory', 'name parent');
+          
+          if (dbItem) {
+            // Enrich with database item details
+            enrichedItems.push({
+              itemName: item.itemName || dbItem.name,
+              sku: item.sku,
+              categoryName: dbItem.subcategory?.parent?.name || item.categoryName,
+              subcategoryName: dbItem.subcategory?.name || item.subcategoryName,
+              quantity: item.quantity,
+              unit: item.unit || dbItem.unit,
+              costPrice: item.costPrice,
+              total: item.total,
+              notes: item.notes || ''
+            });
+          } else {
+            // Item not found in Item model, check embedded items
+            const categories = await Category.find({});
+            let foundItem = null;
+            let foundCategory = null;
+            let foundSubcategory = null;
+            
+            for (const category of categories) {
+              for (const subcategory of category.subcategories) {
+                const embeddedItem = subcategory.items.find(embItem => embItem.sku === item.sku);
+                if (embeddedItem) {
+                  foundItem = embeddedItem;
+                  foundCategory = category;
+                  foundSubcategory = subcategory;
+                  break;
+                }
+              }
+              if (foundItem) break;
+            }
+            
+            if (foundItem) {
+              enrichedItems.push({
+                itemName: item.itemName || foundItem.name,
+                sku: item.sku,
+                categoryName: foundCategory?.name || item.categoryName,
+                subcategoryName: foundSubcategory?.name || item.subcategoryName,
+                quantity: item.quantity,
+                unit: item.unit || foundItem.unit,
+                costPrice: item.costPrice,
+                total: item.total,
+                notes: item.notes || ''
+              });
+            } else {
+              // If SKU doesn't exist, use provided data but log warning
+              console.warn(`Item with SKU ${item.sku} not found in database`);
+              enrichedItems.push({
+                itemName: item.itemName,
+                sku: item.sku || '',
+                categoryName: item.categoryName || '',
+                subcategoryName: item.subcategoryName || '',
+                quantity: item.quantity,
+                unit: item.unit || '',
+                costPrice: item.costPrice,
+                total: item.total,
+                notes: item.notes || ''
+              });
+            }
+          }
+        } else {
+          // No SKU provided, use provided data as-is
+          enrichedItems.push({
+            itemName: item.itemName,
+            sku: '',
+            categoryName: item.categoryName || '',
+            subcategoryName: item.subcategoryName || '',
+            quantity: item.quantity,
+            unit: item.unit || '',
+            costPrice: item.costPrice,
+            total: item.total,
+            notes: item.notes || ''
+          });
+        }
+      }
+    }
+
     // Generate PO number
     const poNumber = await PurchaseOrder.generatePONumber();
 
     const purchaseOrderData = {
       poNumber,
       ...req.body,
+      items: enrichedItems,
       createdBy: req.user.id
     };
 
     const purchaseOrder = new PurchaseOrder(purchaseOrderData);
     await purchaseOrder.save();
+
+    // Update stock for each item in the purchase order
+    for (const poItem of purchaseOrder.items) {
+      if (poItem.sku) {
+        // Try to update stock in standalone Item model first
+        const dbItem = await Item.findOne({ sku: poItem.sku });
+        
+        if (dbItem) {
+          dbItem.stock = (dbItem.stock || 0) + poItem.quantity;
+          if (poItem.costPrice) {
+            dbItem.cost = poItem.costPrice; // Update cost with PO cost
+          }
+          await dbItem.save();
+        }
+        
+        // Also update embedded items in categories
+        const categories = await Category.find({});
+        
+        for (const category of categories) {
+          for (const subcategory of category.subcategories) {
+            for (const item of subcategory.items) {
+              if (item.sku === poItem.sku) {
+                item.stock = (item.stock || 0) + poItem.quantity;
+                if (poItem.costPrice) {
+                  item.cost = poItem.costPrice; // Update cost with PO cost
+                }
+                await category.save();
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
 
     // Populate the created purchase order
     await purchaseOrder.populate([
@@ -139,7 +262,7 @@ export const createPurchaseOrder = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Purchase order created successfully',
+      message: 'Purchase order created successfully and stock updated',
       data: purchaseOrder
     });
   } catch (error) {
@@ -266,27 +389,39 @@ export const receivePurchaseOrder = async (req, res) => {
       });
     }
 
-    const { receivedItems = [] } = req.body; // Array of {itemId, receivedQuantity}
+    const { receivedItems = [] } = req.body; // Array of {sku, receivedQuantity}
 
-    // Update stock if items are being received
-    if (receivedItems.length > 0 && purchaseOrder.status !== 'completed') {
-      for (const poItem of purchaseOrder.items) {
-        // Find matching received item
-        const receivedItem = receivedItems.find(ri => ri.sku === poItem.sku);
+    // Update stock for each item in the purchase order
+    for (const poItem of purchaseOrder.items) {
+      // If receivedItems is provided, use those quantities, otherwise use PO quantities
+      const receivedItem = receivedItems.find(ri => ri.sku === poItem.sku);
+      const quantityToReceive = receivedItem?.receivedQuantity || poItem.quantity;
+      
+      if (poItem.sku) {
+        // Try to update stock in standalone Item model first
+        const dbItem = await Item.findOne({ sku: poItem.sku });
         
-        if (receivedItem) {
-          // Find and update stock in categories
-          const categories = await Category.find({});
-          
-          for (const category of categories) {
-            for (const subcategory of category.subcategories) {
-              for (const item of subcategory.items) {
-                if (item.sku === poItem.sku) {
-                  item.stock = (item.stock || 0) + receivedItem.receivedQuantity;
+        if (dbItem) {
+          dbItem.stock = (dbItem.stock || 0) + quantityToReceive;
+          if (poItem.costPrice) {
+            dbItem.cost = poItem.costPrice; // Update cost with PO cost
+          }
+          await dbItem.save();
+        }
+        
+        // Also update embedded items in categories
+        const categories = await Category.find({});
+        
+        for (const category of categories) {
+          for (const subcategory of category.subcategories) {
+            for (const item of subcategory.items) {
+              if (item.sku === poItem.sku) {
+                item.stock = (item.stock || 0) + quantityToReceive;
+                if (poItem.costPrice) {
                   item.cost = poItem.costPrice; // Update cost with PO cost
-                  await category.save();
-                  break;
                 }
+                await category.save();
+                break;
               }
             }
           }
