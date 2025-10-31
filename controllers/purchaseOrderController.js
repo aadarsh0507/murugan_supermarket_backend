@@ -1,6 +1,8 @@
 import PurchaseOrder from '../models/PurchaseOrder.js';
 import Category from '../models/Category.js';
 import Item from '../models/Item.js';
+import Barcode from '../models/Barcode.js';
+import Store from '../models/Store.js';
 import { validationResult } from 'express-validator';
 
 // @desc    Get all purchase orders
@@ -132,6 +134,30 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
 
+    // Guard 1: validate duplicates directly from client payload
+    if (Array.isArray(req.body.items) && req.body.items.length > 0) {
+      const seenRaw = new Set();
+      for (const raw of req.body.items) {
+        const idPart = (raw.sku && String(raw.sku).trim() !== '')
+          ? `sku:${String(raw.sku).trim().toUpperCase()}`
+          : `name:${String(raw.itemName || '').trim().toLowerCase()}`;
+        const batchPart = String(raw.batchNumber || '').trim().toUpperCase();
+        if (batchPart !== '') {
+          const key = `${idPart}|batch:${batchPart}`;
+          if (seenRaw.has(key)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Validation failed',
+              errors: [
+                { msg: `Duplicate batch '${batchPart}' for the same item`, path: 'items.batchNumber' }
+              ]
+            });
+          }
+          seenRaw.add(key);
+        }
+      }
+    }
+
     // Validate and enrich items with SKU information
     const enrichedItems = [];
     if (req.body.items && req.body.items.length > 0) {
@@ -150,6 +176,7 @@ export const createPurchaseOrder = async (req, res) => {
               subcategoryName: dbItem.subcategory?.name || item.subcategoryName,
               batchNumber: item.batchNumber || '',
               hsnNumber: item.hsnNumber || '',
+              expiryDate: item.expiryDate || null,
               quantity: item.quantity,
               unit: item.unit || dbItem.unit,
               costPrice: item.costPrice,
@@ -184,6 +211,7 @@ export const createPurchaseOrder = async (req, res) => {
                 subcategoryName: foundSubcategory?.name || item.subcategoryName,
                 batchNumber: item.batchNumber || '',
                 hsnNumber: item.hsnNumber || '',
+                expiryDate: item.expiryDate || null,
                 quantity: item.quantity,
                 unit: item.unit || foundItem.unit,
                 costPrice: item.costPrice,
@@ -200,6 +228,7 @@ export const createPurchaseOrder = async (req, res) => {
                 subcategoryName: item.subcategoryName || '',
                 batchNumber: item.batchNumber || '',
                 hsnNumber: item.hsnNumber || '',
+                expiryDate: item.expiryDate || null,
                 quantity: item.quantity,
                 unit: item.unit || '',
                 costPrice: item.costPrice,
@@ -217,12 +246,41 @@ export const createPurchaseOrder = async (req, res) => {
             subcategoryName: item.subcategoryName || '',
             batchNumber: item.batchNumber || '',
             hsnNumber: item.hsnNumber || '',
+            expiryDate: item.expiryDate || null,
             quantity: item.quantity,
             unit: item.unit || '',
             costPrice: item.costPrice,
             total: item.total,
             notes: item.notes || ''
           });
+        }
+      }
+    }
+
+    // Validate duplicate batches per same item (allow duplicates across different items)
+    if (enrichedItems.length > 0) {
+      const seenByItem = new Map(); // key: item identity -> Set(batchNumber)
+      for (const it of enrichedItems) {
+        const identity = (it.sku && it.sku.trim() !== '') ? `sku:${it.sku.trim()}` : `name:${(it.itemName || '').trim().toLowerCase()}`;
+        const batch = (it.batchNumber || '').trim();
+        if (batch !== '') {
+          if (!seenByItem.has(identity)) {
+            seenByItem.set(identity, new Set());
+          }
+          const batches = seenByItem.get(identity);
+          if (batches.has(batch)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Validation failed',
+              errors: [
+                {
+                  msg: `Duplicate batch number '${batch}' for the same item. Each item's batches must be unique`,
+                  path: 'items.batchNumber'
+                }
+              ]
+            });
+          }
+          batches.add(batch);
         }
       }
     }
@@ -260,6 +318,9 @@ export const createPurchaseOrder = async (req, res) => {
               if (poItem.costPrice) {
                 dbItem.batches[existingBatchIndex].costPrice = poItem.costPrice;
               }
+              if (poItem.expiryDate) {
+                dbItem.batches[existingBatchIndex].expiryDate = new Date(poItem.expiryDate);
+              }
             } else {
               dbItem.batches.push({
                 batchNumber: poItem.batchNumber,
@@ -268,6 +329,7 @@ export const createPurchaseOrder = async (req, res) => {
                 costPrice: poItem.costPrice,
                 purchaseOrderNumber: purchaseOrder.poNumber,
                 purchaseDate: new Date(),
+                expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
                 isActive: true,
                 createdBy: req.user.id
               });
@@ -309,6 +371,9 @@ export const createPurchaseOrder = async (req, res) => {
                   if (poItem.costPrice) {
                     item.batches[existingBatchIndex].costPrice = poItem.costPrice;
                   }
+                  if (poItem.expiryDate) {
+                    item.batches[existingBatchIndex].expiryDate = new Date(poItem.expiryDate);
+                  }
                 } else {
                   // Create new batch for this item
                   item.batches.push({
@@ -318,6 +383,7 @@ export const createPurchaseOrder = async (req, res) => {
                     costPrice: poItem.costPrice,
                     purchaseOrderNumber: purchaseOrder.poNumber,
                     purchaseDate: new Date(),
+                    expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
                     isActive: true,
                     createdBy: req.user.id
                   });
@@ -341,6 +407,34 @@ export const createPurchaseOrder = async (req, res) => {
               break;
             }
           }
+        }
+      }
+    }
+
+    // Generate barcodes for each item quantity
+    const store = await Store.findById(purchaseOrder.store);
+    const storeName = store?.name || 'Murugan Supermarket';
+    
+    for (const poItem of purchaseOrder.items) {
+      if (poItem.sku && poItem.quantity > 0) {
+        // Generate one barcode for each quantity unit
+        for (let i = 0; i < poItem.quantity; i++) {
+          const barcodeNumber = await Barcode.generateBarcode();
+          const barcodeData = {
+            barcode: barcodeNumber,
+            purchaseOrder: purchaseOrder._id,
+            purchaseOrderNumber: purchaseOrder.poNumber,
+            itemSku: poItem.sku,
+            itemName: poItem.itemName,
+            store: purchaseOrder.store,
+            storeName: storeName,
+            expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
+            batchNumber: poItem.batchNumber || null,
+            createdBy: req.user.id
+          };
+          
+          const barcode = new Barcode(barcodeData);
+          await barcode.save();
         }
       }
     }
@@ -543,6 +637,218 @@ export const receivePurchaseOrder = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error while receiving purchase order',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get barcodes for a purchase order
+// @route   GET /api/purchase-orders/:id/barcodes
+// @access  Private
+export const getPurchaseOrderBarcodes = async (req, res) => {
+  try {
+    const purchaseOrder = await PurchaseOrder.findById(req.params.id);
+    
+    if (!purchaseOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found'
+      });
+    }
+
+    const barcodes = await Barcode.find({ 
+      purchaseOrder: req.params.id,
+      isUsed: false 
+    }).sort({ createdAt: 1 });
+
+    // Group barcodes by item SKU
+    const groupedBarcodes = {};
+    // Build a quick lookup for amounts from PO items (prefer MRP, fallback to costPrice)
+    const skuToAmount = {};
+    (purchaseOrder.items || []).forEach(poItem => {
+      const amountValue = poItem.mrp != null ? poItem.mrp : poItem.costPrice;
+      skuToAmount[poItem.sku] = amountValue;
+    });
+    barcodes.forEach(barcode => {
+      if (!groupedBarcodes[barcode.itemSku]) {
+        groupedBarcodes[barcode.itemSku] = {
+          itemSku: barcode.itemSku,
+          itemName: barcode.itemName,
+          storeName: barcode.storeName,
+          expiryDate: barcode.expiryDate,
+          batchNumber: barcode.batchNumber,
+          amount: skuToAmount[barcode.itemSku] ?? null,
+          barcodes: []
+        };
+      }
+      groupedBarcodes[barcode.itemSku].barcodes.push({
+        _id: barcode._id,
+        barcode: barcode.barcode,
+        createdAt: barcode.createdAt
+      });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        purchaseOrderNumber: purchaseOrder.poNumber,
+        groupedBarcodes: Object.values(groupedBarcodes)
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching purchase order barcodes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching barcodes',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Regenerate barcodes for a purchase order
+// @route   POST /api/purchase-orders/:id/regenerate-barcodes
+// @access  Private (Admin/Manager)
+export const regeneratePurchaseOrderBarcodes = async (req, res) => {
+  try {
+    const purchaseOrder = await PurchaseOrder.findById(req.params.id)
+      .populate('store', 'name');
+    
+    if (!purchaseOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found'
+      });
+    }
+
+    // Delete existing unused barcodes for this PO
+    await Barcode.deleteMany({
+      purchaseOrder: req.params.id,
+      isUsed: false
+    });
+
+    // Generate new barcodes
+    const storeName = purchaseOrder.store?.name || 'Murugan Supermarket';
+    
+    for (const poItem of purchaseOrder.items) {
+      if (poItem.sku && poItem.quantity > 0) {
+        // Generate one barcode for each quantity unit
+        for (let i = 0; i < poItem.quantity; i++) {
+          const barcodeNumber = await Barcode.generateBarcode();
+          const barcodeData = {
+            barcode: barcodeNumber,
+            purchaseOrder: purchaseOrder._id,
+            purchaseOrderNumber: purchaseOrder.poNumber,
+            itemSku: poItem.sku,
+            itemName: poItem.itemName,
+            store: purchaseOrder.store._id || purchaseOrder.store,
+            storeName: storeName,
+            expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
+            batchNumber: poItem.batchNumber || null,
+            createdBy: req.user.id
+          };
+          
+          const barcode = new Barcode(barcodeData);
+          await barcode.save();
+        }
+      }
+    }
+
+    // Fetch regenerated barcodes
+    const barcodes = await Barcode.find({ 
+      purchaseOrder: req.params.id,
+      isUsed: false 
+    }).sort({ createdAt: 1 });
+
+    res.json({
+      success: true,
+      message: 'Barcodes regenerated successfully',
+      data: {
+        purchaseOrderNumber: purchaseOrder.poNumber,
+        barcodesCount: barcodes.length
+      }
+    });
+  } catch (error) {
+    console.error('Error regenerating barcodes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while regenerating barcodes',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get item details by barcode
+// @route   GET /api/barcodes/:barcode
+// @access  Private
+export const getItemByBarcode = async (req, res) => {
+  try {
+    const barcode = await Barcode.findOne({ 
+      barcode: req.params.barcode,
+      isUsed: false 
+    }).populate('store', 'name code');
+
+    if (!barcode) {
+      return res.status(404).json({
+        success: false,
+        message: 'Barcode not found or already used'
+      });
+    }
+
+    // Find the item details
+    const categories = await Category.find({});
+    let foundItem = null;
+    
+    for (const category of categories) {
+      for (const subcategory of category.subcategories) {
+        const item = subcategory.items.find(embItem => embItem.sku === barcode.itemSku);
+        if (item) {
+          foundItem = {
+            ...item.toObject(),
+            category: category.name,
+            subcategory: subcategory.name
+          };
+          break;
+        }
+      }
+      if (foundItem) break;
+    }
+
+    // Also check standalone Item model
+    if (!foundItem) {
+      const dbItem = await Item.findOne({ sku: barcode.itemSku }).populate('subcategory');
+      if (dbItem) {
+        foundItem = dbItem.toObject();
+      }
+    }
+
+    if (!foundItem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found for this barcode'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        barcode: barcode.barcode,
+        item: {
+          sku: foundItem.sku,
+          name: foundItem.name || barcode.itemName,
+          price: foundItem.price,
+          stock: foundItem.stock,
+          unit: foundItem.unit
+        },
+        expiryDate: barcode.expiryDate,
+        batchNumber: barcode.batchNumber,
+        storeName: barcode.storeName
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching item by barcode:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching item by barcode',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

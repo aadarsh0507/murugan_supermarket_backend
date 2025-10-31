@@ -1,5 +1,6 @@
 import Item from '../models/Item.js';
 import Category from '../models/Category.js';
+import PurchaseOrder from '../models/PurchaseOrder.js';
 import { validationResult } from 'express-validator';
 import mongoose from 'mongoose';
 import path from 'path';
@@ -623,6 +624,23 @@ export const getStockWithBatches = async (req, res) => {
   try {
     const { sku = '', search = '', categoryId = '' } = req.query;
 
+    // Get all purchase orders to lookup expiry dates
+    const purchaseOrders = await PurchaseOrder.find({})
+      .select('poNumber items');
+    
+    // Create a map of SKU + Batch Number + PO Number -> expiryDate
+    const expiryDateMap = new Map();
+    purchaseOrders.forEach(po => {
+      if (po.items && Array.isArray(po.items)) {
+        po.items.forEach(item => {
+          if (item.sku && item.batchNumber && item.expiryDate) {
+            const key = `${item.sku}_${item.batchNumber}_${po.poNumber}`;
+            expiryDateMap.set(key, item.expiryDate);
+          }
+        });
+      }
+    });
+
     // Get all items from standalone Item model
     const query = {};
     if (sku) {
@@ -694,16 +712,25 @@ export const getStockWithBatches = async (req, res) => {
       }
 
       // Return one row per batch
-      return item.batches.filter(batch => batch.isActive).map(batch => ({
-        ...itemData,
-        batchNumber: batch.batchNumber || 'N/A',
-        batchQuantity: batch.quantity || 0,
-        purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
-        purchaseDate: batch.purchaseDate || null,
-        costPrice: batch.costPrice || 0,
-        hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
-        expiryDate: batch.expiryDate || null
-      }));
+      return item.batches.filter(batch => batch.isActive).map(batch => {
+        // Lookup expiry date from purchase order if not in batch
+        let expiryDate = batch.expiryDate || null;
+        if (!expiryDate && batch.purchaseOrderNumber && batch.batchNumber) {
+          const key = `${item.sku}_${batch.batchNumber}_${batch.purchaseOrderNumber}`;
+          expiryDate = expiryDateMap.get(key) || null;
+        }
+        
+        return {
+          ...itemData,
+          batchNumber: batch.batchNumber || 'N/A',
+          batchQuantity: batch.quantity || 0,
+          purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
+          purchaseDate: batch.purchaseDate || null,
+          costPrice: batch.costPrice || 0,
+          hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
+          expiryDate: expiryDate
+        };
+      });
     });
 
     // Format embedded items
@@ -733,16 +760,25 @@ export const getStockWithBatches = async (req, res) => {
       }
 
       // Return one row per batch
-      return item.batches.filter(batch => batch.isActive).map(batch => ({
-        ...itemData,
-        batchNumber: batch.batchNumber || 'N/A',
-        batchQuantity: batch.quantity || 0,
-        purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
-        purchaseDate: batch.purchaseDate || null,
-        costPrice: batch.costPrice || 0,
-        hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
-        expiryDate: batch.expiryDate || null
-      }));
+      return item.batches.filter(batch => batch.isActive).map(batch => {
+        // Lookup expiry date from purchase order if not in batch
+        let expiryDate = batch.expiryDate || null;
+        if (!expiryDate && batch.purchaseOrderNumber && batch.batchNumber) {
+          const key = `${item.sku}_${batch.batchNumber}_${batch.purchaseOrderNumber}`;
+          expiryDate = expiryDateMap.get(key) || null;
+        }
+        
+        return {
+          ...itemData,
+          batchNumber: batch.batchNumber || 'N/A',
+          batchQuantity: batch.quantity || 0,
+          purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
+          purchaseDate: batch.purchaseDate || null,
+          costPrice: batch.costPrice || 0,
+          hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
+          expiryDate: expiryDate
+        };
+      });
     });
 
     // Combine and sort
