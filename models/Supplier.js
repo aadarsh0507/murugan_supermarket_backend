@@ -5,8 +5,7 @@ const supplierSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Company name is required'],
     trim: true,
-    maxlength: [200, 'Company name cannot exceed 200 characters'],
-    index: true
+    maxlength: [200, 'Company name cannot exceed 200 characters']
   },
   contactPerson: {
     firstName: {
@@ -31,8 +30,7 @@ const supplierSchema = new mongoose.Schema({
     required: [true, 'Email is required'],
     lowercase: true,
     trim: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email'],
-    index: true
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
   },
   phone: {
     primary: {
@@ -160,13 +158,13 @@ const supplierSchema = new mongoose.Schema({
 });
 
 // Virtual for contact person full name
-supplierSchema.virtual('contactPerson.fullName').get(function() {
+supplierSchema.virtual('contactPerson.fullName').get(function () {
   if (!this.contactPerson) return '';
   return `${this.contactPerson.firstName || ''} ${this.contactPerson.lastName || ''}`.trim();
 });
 
 // Virtual for active stores count
-supplierSchema.virtual('activeStoresCount').get(function() {
+supplierSchema.virtual('activeStoresCount').get(function () {
   return this.stores ? this.stores.filter(s => s.isActive).length : 0;
 });
 
@@ -178,7 +176,7 @@ supplierSchema.index({ isActive: 1 });
 supplierSchema.index({ 'stores.store': 1 });
 
 // Instance method to add a store
-supplierSchema.methods.addStore = function(storeId) {
+supplierSchema.methods.addStore = function (storeId) {
   const existingStore = this.stores.find(s => s.store.toString() === storeId.toString());
   if (!existingStore) {
     this.stores.push({
@@ -191,13 +189,13 @@ supplierSchema.methods.addStore = function(storeId) {
 };
 
 // Instance method to remove a store
-supplierSchema.methods.removeStore = function(storeId) {
+supplierSchema.methods.removeStore = function (storeId) {
   this.stores = this.stores.filter(s => s.store.toString() !== storeId.toString());
   return this.save();
 };
 
 // Instance method to toggle store status
-supplierSchema.methods.toggleStoreStatus = function(storeId) {
+supplierSchema.methods.toggleStoreStatus = function (storeId) {
   const store = this.stores.find(s => s.store.toString() === storeId.toString());
   if (store) {
     store.isActive = !store.isActive;

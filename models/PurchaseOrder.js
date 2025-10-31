@@ -59,8 +59,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   supplier: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Supplier',
-    required: true,
-    index: true
+    required: true
   },
   store: {
     type: mongoose.Schema.Types.ObjectId,
@@ -76,8 +75,10 @@ const purchaseOrderSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ['pending', 'partially_received', 'completed', 'cancelled'],
+
     default: 'completed',
     index: true
+
   },
   items: [purchaseOrderItemSchema],
   subtotal: {
@@ -137,22 +138,22 @@ const purchaseOrderSchema = new mongoose.Schema({
 });
 
 // Virtual for items count
-purchaseOrderSchema.virtual('itemsCount').get(function() {
+purchaseOrderSchema.virtual('itemsCount').get(function () {
   return this.items ? this.items.length : 0;
 });
 
 // Virtual for total quantity
-purchaseOrderSchema.virtual('totalQuantity').get(function() {
+purchaseOrderSchema.virtual('totalQuantity').get(function () {
   return this.items ? this.items.reduce((sum, item) => sum + item.quantity, 0) : 0;
 });
 
 // Static method to generate next PO number
-purchaseOrderSchema.statics.generatePONumber = async function() {
+purchaseOrderSchema.statics.generatePONumber = async function () {
   const lastPO = await this.findOne({}, {}, { sort: { createdAt: -1 } });
   if (!lastPO) {
     return 'PO-0001';
   }
-  
+
   const match = lastPO.poNumber.match(/PO-(\d+)/);
   if (match) {
     const num = parseInt(match[1]) + 1;
@@ -162,31 +163,30 @@ purchaseOrderSchema.statics.generatePONumber = async function() {
 };
 
 // Pre-save middleware to calculate totals
-purchaseOrderSchema.pre('save', function(next) {
+purchaseOrderSchema.pre('save', function (next) {
   // Ensure numeric values exist
-  const subtotal = (this.items && this.items.length > 0) 
+  const subtotal = (this.items && this.items.length > 0)
     ? this.items.reduce((sum, item) => sum + (item.total || 0), 0)
     : 0;
   const tax = this.tax || 0;
   const shipping = this.shipping || 0;
   const discount = this.discount || 0;
-  
+
   // Set subtotal
   this.subtotal = subtotal;
-  
+
   // Calculate total
   this.total = subtotal + tax + shipping - discount;
-  
+
   // Ensure total is not negative
   if (this.total < 0) {
     this.total = 0;
   }
-  
+
   next();
 });
 
 // Indexes for better performance
-purchaseOrderSchema.index({ poNumber: 1 });
 purchaseOrderSchema.index({ supplier: 1, status: 1 });
 purchaseOrderSchema.index({ store: 1 });
 purchaseOrderSchema.index({ status: 1 });

@@ -47,8 +47,7 @@ const itemSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Item name is required'],
     trim: true,
-    maxlength: [200, 'Item name cannot exceed 200 characters'],
-    index: true
+    maxlength: [200, 'Item name cannot exceed 200 characters']
   },
   sku: {
     type: String,
@@ -176,7 +175,7 @@ itemSchema.virtual('categoryPath', {
 });
 
 // Virtual for stock status
-itemSchema.virtual('stockStatus').get(function() {
+itemSchema.virtual('stockStatus').get(function () {
   if (this.stock === 0) return 'out-of-stock';
   if (this.stock <= this.minStock) return 'low-stock';
   if (this.maxStock && this.stock >= this.maxStock) return 'overstock';
@@ -184,13 +183,13 @@ itemSchema.virtual('stockStatus').get(function() {
 });
 
 // Virtual for profit margin
-itemSchema.virtual('profitMargin').get(function() {
+itemSchema.virtual('profitMargin').get(function () {
   if (!this.cost || this.cost === 0) return null;
   return ((this.price - this.cost) / this.cost * 100).toFixed(2);
 });
 
 // Pre-save middleware
-itemSchema.pre('save', function(next) {
+itemSchema.pre('save', function (next) {
   // Ensure only one primary image
   if (this.images && this.images.length > 0) {
     const primaryImages = this.images.filter(img => img.isPrimary);
@@ -213,7 +212,7 @@ itemSchema.index({ price: 1 });
 itemSchema.index({ createdAt: -1 });
 
 // Static method to get low stock items
-itemSchema.statics.getLowStockItems = function() {
+itemSchema.statics.getLowStockItems = function () {
   return this.find({
     isActive: true,
     $expr: { $lte: ['$stock', '$minStock'] }
@@ -221,7 +220,7 @@ itemSchema.statics.getLowStockItems = function() {
 };
 
 // Static method to get items by category hierarchy
-itemSchema.statics.getItemsByCategory = function(categoryId) {
+itemSchema.statics.getItemsByCategory = function (categoryId) {
   return this.find({
     subcategory: categoryId,
     isActive: true
@@ -229,7 +228,7 @@ itemSchema.statics.getItemsByCategory = function(categoryId) {
 };
 
 // Instance method to check if item can be deleted
-itemSchema.methods.canDelete = function() {
+itemSchema.methods.canDelete = function () {
   // Add any business logic here for item deletion
   return { canDelete: true };
 };

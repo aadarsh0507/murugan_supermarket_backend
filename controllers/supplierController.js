@@ -2,6 +2,13 @@ import mongoose from 'mongoose';
 import Supplier from '../models/Supplier.js';
 import Store from '../models/Store.js';
 import { validationResult } from 'express-validator';
+import csv from 'csv-parser';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // @desc    Get all suppliers
 // @route   GET /api/suppliers
@@ -18,7 +25,7 @@ export const getAllSuppliers = async (req, res) => {
 
     // Build query
     const query = {};
-    
+
     if (search) {
       query.$or = [
         { companyName: { $regex: search, $options: 'i' } },
@@ -28,7 +35,7 @@ export const getAllSuppliers = async (req, res) => {
         { 'phone.primary': { $regex: search, $options: 'i' } }
       ];
     }
-    
+
     if (isActive !== undefined) {
       query.isActive = isActive === 'true' || isActive === true;
     }
@@ -197,14 +204,14 @@ export const createSupplier = async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating supplier:', error);
-    
+
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
         message: 'Supplier with this email already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error while creating supplier',
@@ -488,14 +495,14 @@ export const createStore = async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating store:', error);
-    
+
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
         message: 'Store with this code already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error while creating store',
@@ -544,14 +551,14 @@ export const updateStore = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating store:', error);
-    
+
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
         message: 'Store with this code already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error while updating store',
@@ -576,7 +583,7 @@ export const deleteStore = async (req, res) => {
     // Check if store is associated with any suppliers
     const Supplier = mongoose.model('Supplier');
     const suppliersWithStore = await Supplier.find({ 'stores.store': req.params.id });
-    
+
     if (suppliersWithStore.length > 0) {
       return res.status(400).json({
         success: false,
@@ -600,3 +607,235 @@ export const deleteStore = async (req, res) => {
   }
 };
 
+// @desc    Bulk upload suppliers from CSV
+// @route   POST /api/suppliers/bulk-upload
+// @access  Private (Admin/Manager)
+export const bulkUploadSuppliers = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No CSV file uploaded'
+      });
+    }
+
+    const csvFilePath = req.file.path;
+    const rawRows = [];
+    let rowNumber = 0;
+
+    // First pass: Read all rows from CSV
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(csvFilePath)
+        .pipe(csv())
+        .on('data', (row) => {
+          rawRows.push({ row, index: ++rowNumber });
+        })
+        .on('end', resolve)
+        .on('error', reject);
+    });
+
+    // Second pass: Validate and process rows
+    const totalSuppliers = [];
+    const errors = [];
+    const seenEmails = new Set();
+
+    // Get all existing emails to check duplicates
+    const existingSuppliers = await Supplier.find({ email: { $exists: true, $ne: null } }, 'email');
+    const existingEmails = new Set(existingSuppliers.map(s => (s.email || '').toLowerCase()));
+
+    for (const { row, index } of rawRows) {
+      try {
+        // Skip empty rows
+        if (!row.companyName && !row.email && !row.primaryPhone) {
+          continue;
+        }
+
+        // Helpers to support multiple header styles and normalize values
+        const normalize = (val) => {
+          if (val === undefined || val === null) return '';
+          const s = String(val).trim();
+          if (s.toLowerCase() === 'null' || s.toLowerCase() === 'na' || s === '-') return '';
+          return s;
+        };
+
+        const getVal = (r, ...keys) => {
+          for (const k of keys) {
+            if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
+              return normalize(r[k]);
+            }
+          }
+          return '';
+        };
+
+        // Read common fields from either flat or dot-notated headers
+        const companyName = getVal(row, 'companyName');
+        const contactFirst = getVal(row, 'contactPerson.firstName', 'firstName', 'contactPerson_firstName');
+        const contactLast = getVal(row, 'contactPerson.lastName', 'lastName', 'contactPerson_lastName');
+        const contactFull = getVal(row, 'contactPerson', 'contact_name');
+        const rawEmail = getVal(row, 'email');
+        const primaryPhone = getVal(row, 'primaryPhone', 'phone.primary', 'phone_primary');
+        const secondaryPhone = getVal(row, 'secondaryPhone', 'phone.secondary', 'phone_secondary');
+        const street = getVal(row, 'street', 'address.street', 'address_street');
+        const city = getVal(row, 'city', 'address.city', 'address_city');
+        const state = getVal(row, 'state', 'address.state', 'address_state');
+        const zipCode = getVal(row, 'zipCode', 'address.zipCode', 'address_zipCode', 'address.pincode', 'pincode');
+        const country = getVal(row, 'country', 'address.country', 'address_country');
+        const designation = getVal(row, 'designation');
+        const gstNumberVal = getVal(row, 'gstNumber', 'gst_number');
+        const panNumberVal = getVal(row, 'panNumber', 'pan_number');
+        const accountNumber = getVal(row, 'accountNumber', 'bank.accountNumber');
+        const bankName = getVal(row, 'bankName', 'bank.bankName', 'bank.name');
+        const branch = getVal(row, 'branch', 'bank.branch');
+        const ifscCode = getVal(row, 'ifscCode', 'bank.ifscCode', 'ifsc');
+        const creditLimitStr = getVal(row, 'creditLimit');
+        const paymentTerms = getVal(row, 'paymentTerms');
+        const isActiveRaw = getVal(row, 'isActive', 'active');
+        const notes = getVal(row, 'notes', 'remark', 'remarks');
+
+        const email = rawEmail ? rawEmail.toLowerCase() : '';
+
+        // Check for duplicate email in current batch
+        if (email && seenEmails.has(email)) {
+          errors.push({
+            row: index,
+            error: 'Duplicate email in CSV file',
+            data: row
+          });
+          continue;
+        }
+
+        // Check if supplier already exists in database
+        if (email && existingEmails.has(email)) {
+          errors.push({
+            row: index,
+            error: 'Supplier with this email already exists in database',
+            data: row
+          });
+          continue;
+        }
+
+        // Parse contact person name
+        let firstName = contactFirst;
+        let lastName = contactLast;
+        if (!firstName && contactFull) {
+          const parts = contactFull.split(' ');
+          firstName = parts[0] || '';
+          lastName = parts.slice(1).join(' ') || '';
+        }
+
+        // Normalize boolean-like values
+        const parseBoolean = (value, defaultValue = true) => {
+          if (value === undefined || value === null || value === '') return defaultValue;
+          const v = String(value).trim().toLowerCase();
+          if (['true', '1', 'yes', 'y'].includes(v)) return true;
+          if (['false', '0', 'no', 'n'].includes(v)) return false;
+          return defaultValue;
+        };
+
+        // Build supplier object (only include fields that exist in CSV)
+        const supplierData = { createdBy: req.user.id };
+
+        if (companyName) supplierData.companyName = companyName;
+
+        // contactPerson only if present
+        const contact = {};
+        if (firstName) contact.firstName = firstName;
+        if (lastName) contact.lastName = lastName;
+        if (designation) contact.designation = designation;
+        if (Object.keys(contact).length > 0) supplierData.contactPerson = contact;
+
+        if (email) supplierData.email = email;
+
+        // phone only if any present
+        const phone = {};
+        if (primaryPhone) phone.primary = primaryPhone;
+        if (secondaryPhone) phone.secondary = secondaryPhone;
+        if (Object.keys(phone).length > 0) supplierData.phone = phone;
+
+        // address only if any present
+        const addr = {};
+        if (street) addr.street = street;
+        if (city) addr.city = city;
+        if (state) addr.state = state;
+        if (zipCode) addr.zipCode = zipCode;
+        if (country) addr.country = country;
+        if (Object.keys(addr).length > 0) supplierData.address = addr;
+
+        // identifiers and bank
+        if (gstNumberVal) supplierData.gstNumber = gstNumberVal.toUpperCase();
+        if (panNumberVal) supplierData.panNumber = panNumberVal.toUpperCase();
+        const bank = {};
+        if (accountNumber) bank.accountNumber = accountNumber;
+        if (bankName) bank.bankName = bankName;
+        if (branch) bank.branch = branch;
+        if (ifscCode) bank.ifscCode = ifscCode.toUpperCase();
+        if (Object.keys(bank).length > 0) supplierData.bankDetails = bank;
+
+        if (creditLimitStr && String(creditLimitStr).trim() !== '') supplierData.creditLimit = parseFloat(creditLimitStr);
+        if (paymentTerms) supplierData.paymentTerms = paymentTerms;
+        supplierData.isActive = parseBoolean(isActiveRaw, true);
+        if (notes) supplierData.notes = notes;
+        supplierData.stores = [];
+
+        totalSuppliers.push(supplierData);
+        if (email) seenEmails.add(email);
+      } catch (error) {
+        errors.push({
+          row: index,
+          error: error.message,
+          data: row
+        });
+      }
+    }
+
+    // Delete uploaded file
+    fs.unlinkSync(csvFilePath);
+
+    // If there are only errors and no valid suppliers
+    if (totalSuppliers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid suppliers found in CSV file',
+        errors: errors
+      });
+    }
+
+    // Insert using native collection to bypass Mongoose validations for bulk upload
+    const insertResult = await Supplier.collection.insertMany(totalSuppliers, { ordered: false });
+    const insertedIds = Object.values(insertResult.insertedIds || {});
+
+    // Populate created suppliers
+    const populatedSuppliers = insertedIds.length
+      ? await Supplier.find({ _id: { $in: insertedIds } }).populate('createdBy', 'firstName lastName')
+      : [];
+
+    res.status(201).json({
+      success: true,
+      message: `Bulk upload completed. ${populatedSuppliers.length} supplier(s) created successfully.`,
+      data: {
+        totalRows: rawRows.length,
+        successCount: populatedSuppliers.length,
+        errorCount: errors.length,
+        suppliers: populatedSuppliers,
+        errors: errors
+      }
+    });
+  } catch (error) {
+    console.error('Error in bulk upload:', error);
+
+    // Delete uploaded file in case of error
+    if (req.file && req.file.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.error('Error deleting file:', unlinkError);
+      }
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Server error while processing bulk upload',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
