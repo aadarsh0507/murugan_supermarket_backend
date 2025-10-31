@@ -1,6 +1,8 @@
 import PurchaseOrder from '../models/PurchaseOrder.js';
 import Category from '../models/Category.js';
 import Item from '../models/Item.js';
+import Barcode from '../models/Barcode.js';
+import Store from '../models/Store.js';
 import { validationResult } from 'express-validator';
 
 // @desc    Get all purchase orders
@@ -14,7 +16,9 @@ export const getAllPurchaseOrders = async (req, res) => {
       search = '',
       status = '',
       supplierId = '',
-      storeId = ''
+      storeId = '',
+      startDate = '',
+      endDate = ''
     } = req.query;
 
     // Build query
@@ -34,6 +38,17 @@ export const getAllPurchaseOrders = async (req, res) => {
 
     if (storeId) {
       query.store = storeId;
+    }
+
+    // Date filtering
+    if (startDate || endDate) {
+      query.orderDate = {};
+      if (startDate) {
+        query.orderDate.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.orderDate.$lte = new Date(endDate + 'T23:59:59.999Z');
+      }
     }
 
     // Calculate pagination
@@ -119,6 +134,30 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
 
+    // Guard 1: validate duplicates directly from client payload
+    if (Array.isArray(req.body.items) && req.body.items.length > 0) {
+      const seenRaw = new Set();
+      for (const raw of req.body.items) {
+        const idPart = (raw.sku && String(raw.sku).trim() !== '')
+          ? `sku:${String(raw.sku).trim().toUpperCase()}`
+          : `name:${String(raw.itemName || '').trim().toLowerCase()}`;
+        const batchPart = String(raw.batchNumber || '').trim().toUpperCase();
+        if (batchPart !== '') {
+          const key = `${idPart}|batch:${batchPart}`;
+          if (seenRaw.has(key)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Validation failed',
+              errors: [
+                { msg: `Duplicate batch '${batchPart}' for the same item`, path: 'items.batchNumber' }
+              ]
+            });
+          }
+          seenRaw.add(key);
+        }
+      }
+    }
+
     // Validate and enrich items with SKU information
     const enrichedItems = [];
     if (req.body.items && req.body.items.length > 0) {
@@ -135,6 +174,9 @@ export const createPurchaseOrder = async (req, res) => {
               sku: item.sku,
               categoryName: dbItem.subcategory?.parent?.name || item.categoryName,
               subcategoryName: dbItem.subcategory?.name || item.subcategoryName,
+              batchNumber: item.batchNumber || '',
+              hsnNumber: item.hsnNumber || '',
+              expiryDate: item.expiryDate || null,
               quantity: item.quantity,
               unit: item.unit || dbItem.unit,
               costPrice: item.costPrice,
@@ -167,6 +209,9 @@ export const createPurchaseOrder = async (req, res) => {
                 sku: item.sku,
                 categoryName: foundCategory?.name || item.categoryName,
                 subcategoryName: foundSubcategory?.name || item.subcategoryName,
+                batchNumber: item.batchNumber || '',
+                hsnNumber: item.hsnNumber || '',
+                expiryDate: item.expiryDate || null,
                 quantity: item.quantity,
                 unit: item.unit || foundItem.unit,
                 costPrice: item.costPrice,
@@ -181,6 +226,9 @@ export const createPurchaseOrder = async (req, res) => {
                 sku: item.sku || '',
                 categoryName: item.categoryName || '',
                 subcategoryName: item.subcategoryName || '',
+                batchNumber: item.batchNumber || '',
+                hsnNumber: item.hsnNumber || '',
+                expiryDate: item.expiryDate || null,
                 quantity: item.quantity,
                 unit: item.unit || '',
                 costPrice: item.costPrice,
@@ -196,12 +244,43 @@ export const createPurchaseOrder = async (req, res) => {
             sku: '',
             categoryName: item.categoryName || '',
             subcategoryName: item.subcategoryName || '',
+            batchNumber: item.batchNumber || '',
+            hsnNumber: item.hsnNumber || '',
+            expiryDate: item.expiryDate || null,
             quantity: item.quantity,
             unit: item.unit || '',
             costPrice: item.costPrice,
             total: item.total,
             notes: item.notes || ''
           });
+        }
+      }
+    }
+
+    // Validate duplicate batches per same item (allow duplicates across different items)
+    if (enrichedItems.length > 0) {
+      const seenByItem = new Map(); // key: item identity -> Set(batchNumber)
+      for (const it of enrichedItems) {
+        const identity = (it.sku && it.sku.trim() !== '') ? `sku:${it.sku.trim()}` : `name:${(it.itemName || '').trim().toLowerCase()}`;
+        const batch = (it.batchNumber || '').trim();
+        if (batch !== '') {
+          if (!seenByItem.has(identity)) {
+            seenByItem.set(identity, new Set());
+          }
+          const batches = seenByItem.get(identity);
+          if (batches.has(batch)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Validation failed',
+              errors: [
+                {
+                  msg: `Duplicate batch number '${batch}' for the same item. Each item's batches must be unique`,
+                  path: 'items.batchNumber'
+                }
+              ]
+            });
+          }
+          batches.add(batch);
         }
       }
     }
@@ -219,36 +298,143 @@ export const createPurchaseOrder = async (req, res) => {
     const purchaseOrder = new PurchaseOrder(purchaseOrderData);
     await purchaseOrder.save();
 
-    // Update stock for each item in the purchase order
+    // Create batches for each item in the purchase order and update stock
     for (const poItem of purchaseOrder.items) {
       if (poItem.sku) {
-        // Try to update stock in standalone Item model first
+        // Try to update standalone Item model first
         const dbItem = await Item.findOne({ sku: poItem.sku });
         
         if (dbItem) {
+          // If batch number is provided, create/update batch
+          if (poItem.batchNumber) {
+            if (!dbItem.batches) {
+              dbItem.batches = [];
+            }
+            
+            const existingBatchIndex = dbItem.batches.findIndex(batch => batch.batchNumber === poItem.batchNumber);
+            
+            if (existingBatchIndex !== -1) {
+              dbItem.batches[existingBatchIndex].quantity = (dbItem.batches[existingBatchIndex].quantity || 0) + poItem.quantity;
+              if (poItem.costPrice) {
+                dbItem.batches[existingBatchIndex].costPrice = poItem.costPrice;
+              }
+              if (poItem.expiryDate) {
+                dbItem.batches[existingBatchIndex].expiryDate = new Date(poItem.expiryDate);
+              }
+            } else {
+              dbItem.batches.push({
+                batchNumber: poItem.batchNumber,
+                hsnNumber: poItem.hsnNumber || '',
+                quantity: poItem.quantity,
+                costPrice: poItem.costPrice,
+                purchaseOrderNumber: purchaseOrder.poNumber,
+                purchaseDate: new Date(),
+                expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
+                isActive: true,
+                createdBy: req.user.id
+              });
+            }
+          }
+          
           dbItem.stock = (dbItem.stock || 0) + poItem.quantity;
           if (poItem.costPrice) {
-            dbItem.cost = poItem.costPrice; // Update cost with PO cost
+            dbItem.cost = poItem.costPrice;
+          }
+          if (poItem.hsnNumber && !dbItem.hsnCode) {
+            dbItem.hsnCode = poItem.hsnNumber;
           }
           await dbItem.save();
         }
         
-        // Also update embedded items in categories
+        // Find and update embedded items in categories
         const categories = await Category.find({});
         
         for (const category of categories) {
           for (const subcategory of category.subcategories) {
-            for (const item of subcategory.items) {
-              if (item.sku === poItem.sku) {
-                item.stock = (item.stock || 0) + poItem.quantity;
-                if (poItem.costPrice) {
-                  item.cost = poItem.costPrice; // Update cost with PO cost
+            const itemIndex = subcategory.items.findIndex(item => item.sku === poItem.sku);
+            if (itemIndex !== -1) {
+              const item = subcategory.items[itemIndex];
+              
+              // If batch number is provided, create/update batch
+              if (poItem.batchNumber) {
+                // Initialize batches array if it doesn't exist
+                if (!item.batches) {
+                  item.batches = [];
                 }
-                await category.save();
-                break;
+                
+                // Check if batch already exists
+                const existingBatchIndex = item.batches.findIndex(batch => batch.batchNumber === poItem.batchNumber);
+                
+                if (existingBatchIndex !== -1) {
+                  // Update existing batch quantity instead of creating new one
+                  item.batches[existingBatchIndex].quantity = (item.batches[existingBatchIndex].quantity || 0) + poItem.quantity;
+                  if (poItem.costPrice) {
+                    item.batches[existingBatchIndex].costPrice = poItem.costPrice;
+                  }
+                  if (poItem.expiryDate) {
+                    item.batches[existingBatchIndex].expiryDate = new Date(poItem.expiryDate);
+                  }
+                } else {
+                  // Create new batch for this item
+                  item.batches.push({
+                    batchNumber: poItem.batchNumber,
+                    hsnNumber: poItem.hsnNumber || '',
+                    quantity: poItem.quantity,
+                    costPrice: poItem.costPrice,
+                    purchaseOrderNumber: purchaseOrder.poNumber,
+                    purchaseDate: new Date(),
+                    expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
+                    isActive: true,
+                    createdBy: req.user.id
+                  });
+                }
               }
+              
+              // Update item cost with latest PO cost if provided
+              if (poItem.costPrice) {
+                item.cost = poItem.costPrice;
+              }
+              
+              // Update HSN code if provided
+              if (poItem.hsnNumber && !item.hsnCode) {
+                item.hsnCode = poItem.hsnNumber;
+              }
+              
+              // Update stock field (always update stock regardless of batch number)
+              item.stock = (item.stock || 0) + poItem.quantity;
+              
+              await category.save();
+              break;
             }
           }
+        }
+      }
+    }
+
+    // Generate barcodes for each item quantity
+    const store = await Store.findById(purchaseOrder.store);
+    const storeName = store?.name || 'Murugan Supermarket';
+    
+    for (const poItem of purchaseOrder.items) {
+      if (poItem.sku && poItem.quantity > 0) {
+        // Generate one barcode for each quantity unit
+        for (let i = 0; i < poItem.quantity; i++) {
+          const barcodeNumber = await Barcode.generateBarcode();
+          const barcodeData = {
+            barcode: barcodeNumber,
+            purchaseOrder: purchaseOrder._id,
+            purchaseOrderNumber: purchaseOrder.poNumber,
+            itemSku: poItem.sku,
+            itemName: poItem.itemName,
+            store: purchaseOrder.store,
+            storeName: storeName,
+            expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
+            batchNumber: poItem.batchNumber || null,
+            createdBy: req.user.id
+          };
+          
+          const barcode = new Barcode(barcodeData);
+          await barcode.save();
         }
       }
     }
@@ -262,7 +448,7 @@ export const createPurchaseOrder = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Purchase order created successfully and stock updated',
+      message: 'Purchase order created successfully, batches added and stock updated',
       data: purchaseOrder
     });
   } catch (error) {
@@ -451,6 +637,218 @@ export const receivePurchaseOrder = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error while receiving purchase order',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get barcodes for a purchase order
+// @route   GET /api/purchase-orders/:id/barcodes
+// @access  Private
+export const getPurchaseOrderBarcodes = async (req, res) => {
+  try {
+    const purchaseOrder = await PurchaseOrder.findById(req.params.id);
+    
+    if (!purchaseOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found'
+      });
+    }
+
+    const barcodes = await Barcode.find({ 
+      purchaseOrder: req.params.id,
+      isUsed: false 
+    }).sort({ createdAt: 1 });
+
+    // Group barcodes by item SKU
+    const groupedBarcodes = {};
+    // Build a quick lookup for amounts from PO items (prefer MRP, fallback to costPrice)
+    const skuToAmount = {};
+    (purchaseOrder.items || []).forEach(poItem => {
+      const amountValue = poItem.mrp != null ? poItem.mrp : poItem.costPrice;
+      skuToAmount[poItem.sku] = amountValue;
+    });
+    barcodes.forEach(barcode => {
+      if (!groupedBarcodes[barcode.itemSku]) {
+        groupedBarcodes[barcode.itemSku] = {
+          itemSku: barcode.itemSku,
+          itemName: barcode.itemName,
+          storeName: barcode.storeName,
+          expiryDate: barcode.expiryDate,
+          batchNumber: barcode.batchNumber,
+          amount: skuToAmount[barcode.itemSku] ?? null,
+          barcodes: []
+        };
+      }
+      groupedBarcodes[barcode.itemSku].barcodes.push({
+        _id: barcode._id,
+        barcode: barcode.barcode,
+        createdAt: barcode.createdAt
+      });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        purchaseOrderNumber: purchaseOrder.poNumber,
+        groupedBarcodes: Object.values(groupedBarcodes)
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching purchase order barcodes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching barcodes',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Regenerate barcodes for a purchase order
+// @route   POST /api/purchase-orders/:id/regenerate-barcodes
+// @access  Private (Admin/Manager)
+export const regeneratePurchaseOrderBarcodes = async (req, res) => {
+  try {
+    const purchaseOrder = await PurchaseOrder.findById(req.params.id)
+      .populate('store', 'name');
+    
+    if (!purchaseOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found'
+      });
+    }
+
+    // Delete existing unused barcodes for this PO
+    await Barcode.deleteMany({
+      purchaseOrder: req.params.id,
+      isUsed: false
+    });
+
+    // Generate new barcodes
+    const storeName = purchaseOrder.store?.name || 'Murugan Supermarket';
+    
+    for (const poItem of purchaseOrder.items) {
+      if (poItem.sku && poItem.quantity > 0) {
+        // Generate one barcode for each quantity unit
+        for (let i = 0; i < poItem.quantity; i++) {
+          const barcodeNumber = await Barcode.generateBarcode();
+          const barcodeData = {
+            barcode: barcodeNumber,
+            purchaseOrder: purchaseOrder._id,
+            purchaseOrderNumber: purchaseOrder.poNumber,
+            itemSku: poItem.sku,
+            itemName: poItem.itemName,
+            store: purchaseOrder.store._id || purchaseOrder.store,
+            storeName: storeName,
+            expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
+            batchNumber: poItem.batchNumber || null,
+            createdBy: req.user.id
+          };
+          
+          const barcode = new Barcode(barcodeData);
+          await barcode.save();
+        }
+      }
+    }
+
+    // Fetch regenerated barcodes
+    const barcodes = await Barcode.find({ 
+      purchaseOrder: req.params.id,
+      isUsed: false 
+    }).sort({ createdAt: 1 });
+
+    res.json({
+      success: true,
+      message: 'Barcodes regenerated successfully',
+      data: {
+        purchaseOrderNumber: purchaseOrder.poNumber,
+        barcodesCount: barcodes.length
+      }
+    });
+  } catch (error) {
+    console.error('Error regenerating barcodes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while regenerating barcodes',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get item details by barcode
+// @route   GET /api/barcodes/:barcode
+// @access  Private
+export const getItemByBarcode = async (req, res) => {
+  try {
+    const barcode = await Barcode.findOne({ 
+      barcode: req.params.barcode,
+      isUsed: false 
+    }).populate('store', 'name code');
+
+    if (!barcode) {
+      return res.status(404).json({
+        success: false,
+        message: 'Barcode not found or already used'
+      });
+    }
+
+    // Find the item details
+    const categories = await Category.find({});
+    let foundItem = null;
+    
+    for (const category of categories) {
+      for (const subcategory of category.subcategories) {
+        const item = subcategory.items.find(embItem => embItem.sku === barcode.itemSku);
+        if (item) {
+          foundItem = {
+            ...item.toObject(),
+            category: category.name,
+            subcategory: subcategory.name
+          };
+          break;
+        }
+      }
+      if (foundItem) break;
+    }
+
+    // Also check standalone Item model
+    if (!foundItem) {
+      const dbItem = await Item.findOne({ sku: barcode.itemSku }).populate('subcategory');
+      if (dbItem) {
+        foundItem = dbItem.toObject();
+      }
+    }
+
+    if (!foundItem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found for this barcode'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        barcode: barcode.barcode,
+        item: {
+          sku: foundItem.sku,
+          name: foundItem.name || barcode.itemName,
+          price: foundItem.price,
+          stock: foundItem.stock,
+          unit: foundItem.unit
+        },
+        expiryDate: barcode.expiryDate,
+        batchNumber: barcode.batchNumber,
+        storeName: barcode.storeName
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching item by barcode:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching item by barcode',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

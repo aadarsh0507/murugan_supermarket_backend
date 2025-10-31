@@ -6,7 +6,9 @@ import {
   createPurchaseOrder,
   updatePurchaseOrder,
   deletePurchaseOrder,
-  receivePurchaseOrder
+  receivePurchaseOrder,
+  getPurchaseOrderBarcodes,
+  regeneratePurchaseOrderBarcodes
 } from '../controllers/purchaseOrderController.js';
 import { protect, authorize } from '../middleware/auth.js';
 
@@ -66,6 +68,16 @@ router.post('/', protect, authorize('admin', 'manager'), createPurchaseOrderVali
 // @desc    Receive purchase order and update stock
 // @access  Private (Admin/Manager)
 router.patch('/:id/receive', protect, authorize('admin', 'manager'), receivePurchaseOrder);
+
+// @route   GET /api/purchase-orders/:id/barcodes
+// @desc    Get barcodes for a purchase order
+// @access  Private
+router.get('/:id/barcodes', protect, getPurchaseOrderBarcodes);
+
+// @route   POST /api/purchase-orders/:id/regenerate-barcodes
+// @desc    Regenerate barcodes for a purchase order
+// @access  Private (Admin/Manager)
+router.post('/:id/regenerate-barcodes', protect, authorize('admin', 'manager'), regeneratePurchaseOrderBarcodes);
 
 // @route   GET /api/purchase-orders/:id
 // @desc    Get single purchase order
