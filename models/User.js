@@ -21,8 +21,7 @@ const userSchema = new mongoose.Schema({
     unique: true,
     lowercase: true,
     trim: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email'],
-    index: true
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
   },
   password: {
     type: String,
@@ -108,7 +107,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // Virtual for full name
-userSchema.virtual('fullName').get(function() {
+userSchema.virtual('fullName').get(function () {
   return `${this.firstName} ${this.lastName}`;
 });
 
@@ -119,7 +118,7 @@ userSchema.index({ isActive: 1 });
 userSchema.index({ stores: 1 });
 
 // Pre-save middleware to hash password
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   // Only hash the password if it has been modified (or is new)
   if (!this.isModified('password')) return next();
 
@@ -134,62 +133,62 @@ userSchema.pre('save', async function(next) {
 });
 
 // Instance method to check password
-userSchema.methods.comparePassword = async function(candidatePassword) {
+userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
 // Instance method to update last login
-userSchema.methods.updateLastLogin = function() {
+userSchema.methods.updateLastLogin = function () {
   this.lastLogin = new Date();
   return this.save({ validateBeforeSave: false });
 };
 
 // Static method to find active users
-userSchema.statics.findActiveUsers = function() {
+userSchema.statics.findActiveUsers = function () {
   return this.find({ isActive: true });
 };
 
 // Static method to find users by role
-userSchema.statics.findByRole = function(role) {
+userSchema.statics.findByRole = function (role) {
   return this.find({ role, isActive: true });
 };
 
 // Instance method to generate OTP for password reset
-userSchema.methods.generateResetPasswordOTP = function() {
+userSchema.methods.generateResetPasswordOTP = function () {
   // Generate 6-digit OTP
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  
+
   // Hash the OTP before storing
   const hashedOTP = crypto.createHash('sha256').update(otp).digest('hex');
-  
+
   // Set OTP and expiration (10 minutes from now)
   this.resetPasswordOTP = hashedOTP;
   this.resetPasswordOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-  
+
   return otp; // Return the plain OTP to send via email
 };
 
 // Instance method to verify OTP for password reset
-userSchema.methods.verifyResetPasswordOTP = function(otp) {
+userSchema.methods.verifyResetPasswordOTP = function (otp) {
   // Check if OTP exists and hasn't expired
   if (!this.resetPasswordOTP || !this.resetPasswordOTPExpires) {
     return false;
   }
-  
+
   if (new Date() > this.resetPasswordOTPExpires) {
     // OTP has expired, clear it
     this.resetPasswordOTP = null;
     this.resetPasswordOTPExpires = null;
     return false;
   }
-  
+
   // Hash the provided OTP and compare with stored hash
   const hashedOTP = crypto.createHash('sha256').update(otp).digest('hex');
   return hashedOTP === this.resetPasswordOTP;
 };
 
 // Instance method to clear OTP after successful reset
-userSchema.methods.clearResetPasswordOTP = function() {
+userSchema.methods.clearResetPasswordOTP = function () {
   this.resetPasswordOTP = null;
   this.resetPasswordOTPExpires = null;
   return this.save({ validateBeforeSave: false });

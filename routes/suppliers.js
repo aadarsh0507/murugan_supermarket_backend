@@ -12,9 +12,11 @@ import {
   getAllStores,
   createStore,
   updateStore,
-  deleteStore
+  deleteStore,
+  bulkUploadSuppliers
 } from '../controllers/supplierController.js';
 import { protect, authorize } from '../middleware/auth.js';
+import { uploadCSV } from '../middleware/upload.js';
 
 const router = express.Router();
 
@@ -173,6 +175,11 @@ const createStoreValidation = [
 ];
 
 // Routes
+// @route   POST /api/suppliers/bulk-upload
+// @desc    Bulk upload suppliers from CSV
+// @access  Private (Admin/Manager)
+router.post('/bulk-upload', protect, authorize('admin', 'manager'), uploadCSV.single('file'), bulkUploadSuppliers);
+
 // @route   GET /api/suppliers/stores
 // @desc    Get all stores
 // @access  Private
