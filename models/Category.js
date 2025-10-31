@@ -5,7 +5,7 @@ const batchSchema = new mongoose.Schema({
   batchNumber: {
     type: String,
     required: true,
-    trim: true
+   trim: true
   },
   hsnNumber: {
     type: String,
@@ -136,6 +136,16 @@ const itemSchema = new mongoose.Schema({
       default: false
     }
   }],
+  store: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    required: true
+  },
+  storeName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -196,7 +206,8 @@ const categorySchema = new mongoose.Schema({
     type: String,
     required: [true, 'Category name is required'],
     trim: true,
-    maxlength: [100, 'Category name cannot exceed 100 characters']
+    maxlength: [100, 'Category name cannot exceed 100 characters'],
+    index: true
   },
   slug: {
     type: String,
@@ -206,6 +217,17 @@ const categorySchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  store: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    required: true,
+    index: true
+  },
+  storeName: {
+    type: String,
+    required: true,
+    trim: true
   },
   subcategories: [subcategorySchema],
   createdBy: {
@@ -224,14 +246,20 @@ const categorySchema = new mongoose.Schema({
 });
 
 // Virtual for total item count across all subcategories
-categorySchema.virtual('totalItemCount').get(function () {
+categorySchema.virtual('totalItemCount').get(function() {
+  if (!this.subcategories || !Array.isArray(this.subcategories)) {
+    return 0;
+  }
   return this.subcategories.reduce((total, subcategory) => {
     return total + (subcategory.items ? subcategory.items.length : 0);
   }, 0);
 });
 
 // Virtual for active item count
-categorySchema.virtual('activeItemCount').get(function () {
+categorySchema.virtual('activeItemCount').get(function() {
+  if (!this.subcategories || !Array.isArray(this.subcategories)) {
+    return 0;
+  }
   return this.subcategories.reduce((total, subcategory) => {
     if (!subcategory.items) return total;
     return total + subcategory.items.filter(item => item.isActive).length;
@@ -239,12 +267,15 @@ categorySchema.virtual('activeItemCount').get(function () {
 });
 
 // Virtual for subcategory count
-categorySchema.virtual('subcategoryCount').get(function () {
-  return this.subcategories ? this.subcategories.length : 0;
+categorySchema.virtual('subcategoryCount').get(function() {
+  if (!this.subcategories || !Array.isArray(this.subcategories)) {
+    return 0;
+  }
+  return this.subcategories.length;
 });
 
 // Pre-save middleware to generate slugs
-categorySchema.pre('save', function (next) {
+categorySchema.pre('save', function(next) {
   try {
     // Generate slug for main category
     if (this.isModified('name')) {
@@ -273,13 +304,13 @@ categorySchema.pre('save', function (next) {
 });
 
 // Instance method to add subcategory
-categorySchema.methods.addSubcategory = function (subcategoryData) {
+categorySchema.methods.addSubcategory = function(subcategoryData) {
   this.subcategories.push(subcategoryData);
   return this.save();
 };
 
 // Instance method to add item to subcategory
-categorySchema.methods.addItemToSubcategory = function (subcategoryName, itemData) {
+categorySchema.methods.addItemToSubcategory = function(subcategoryName, itemData) {
   const subcategory = this.subcategories.find(sub => sub.name === subcategoryName);
   if (subcategory) {
     subcategory.items.push(itemData);
@@ -289,12 +320,12 @@ categorySchema.methods.addItemToSubcategory = function (subcategoryName, itemDat
 };
 
 // Instance method to get subcategory by name
-categorySchema.methods.getSubcategory = function (subcategoryName) {
+categorySchema.methods.getSubcategory = function(subcategoryName) {
   return this.subcategories.find(sub => sub.name === subcategoryName);
 };
 
 // Instance method to get item by SKU
-categorySchema.methods.getItemBySku = function (sku) {
+categorySchema.methods.getItemBySku = function(sku) {
   for (const subcategory of this.subcategories) {
     const item = subcategory.items.find(item => item.sku === sku);
     if (item) return item;
@@ -303,22 +334,24 @@ categorySchema.methods.getItemBySku = function (sku) {
 };
 
 // Instance method to check if category can be deleted
-categorySchema.methods.canDelete = function () {
+categorySchema.methods.canDelete = function() {
   const totalItems = this.totalItemCount;
   if (totalItems > 0) {
     return { canDelete: false, reason: `Cannot delete category with ${totalItems} items` };
   }
-
+  
   const subcategoryCount = this.subcategoryCount;
   if (subcategoryCount > 0) {
     return { canDelete: false, reason: `Cannot delete category with ${subcategoryCount} subcategories` };
   }
-
+  
   return { canDelete: true };
 };
 
 // Indexes for better performance
 categorySchema.index({ name: 1, isActive: 1 });
+categorySchema.index({ store: 1, isActive: 1 });
+categorySchema.index({ store: 1, name: 1 });
 categorySchema.index({ slug: 1 }, { unique: true, sparse: true });
 categorySchema.index({ 'subcategories.name': 1 });
 categorySchema.index({ 'subcategories.items.sku': 1 });

@@ -141,6 +141,17 @@ const itemSchema = new mongoose.Schema({
   expiryDate: {
     type: Date
   },
+  store: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    required: true,
+    index: true
+  },
+  storeName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -206,6 +217,8 @@ itemSchema.pre('save', function (next) {
 // Indexes for better performance
 itemSchema.index({ name: 1, isActive: 1 });
 itemSchema.index({ subcategory: 1, isActive: 1 });
+itemSchema.index({ store: 1, isActive: 1 });
+itemSchema.index({ store: 1, name: 1 });
 itemSchema.index({ tags: 1 });
 itemSchema.index({ stock: 1 });
 itemSchema.index({ price: 1 });

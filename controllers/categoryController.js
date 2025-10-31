@@ -58,8 +58,18 @@ export const getAllCategories = async (req, res) => {
       includeSubcategories = false
     } = req.query;
 
+    // Get user's selected store - required for filtering
+    const User = (await import('../models/User.js')).default;
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before viewing categories. Go to "Select Store" in the sidebar.'
+      });
+    }
+
     // Build query
-    const query = {};
+    const query = { store: user.selectedStore._id };
     
     if (search) {
       query.name = { $regex: search, $options: 'i' };
@@ -75,21 +85,36 @@ export const getAllCategories = async (req, res) => {
 
     // Execute query
     const categories = await Category.find(query)
+      .populate('store', 'name code')
       .populate('createdBy', 'firstName lastName')
       .populate('updatedBy', 'firstName lastName')
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
 
-    const total = await Category.countDocuments(query);
+    // Filter embedded items by store (items already have store field)
+    const filteredCategories = categories.map(category => {
+      const categoryObj = category.toObject();
+      // Filter items in each subcategory by store
+      if (categoryObj.subcategories) {
+        categoryObj.subcategories = categoryObj.subcategories.map(subcategory => {
+          if (subcategory.items) {
+            subcategory.items = subcategory.items.filter(item => 
+              item.store && item.store.toString() === user.selectedStore._id.toString()
+            );
+          }
+          return subcategory;
+        });
+      }
+      return categoryObj;
+    });
 
-    // Subcategories and items are already embedded, no need for additional population
-    // The includeSubcategories parameter is now always true since subcategories are embedded
+    const total = await Category.countDocuments(query);
 
     res.json({
       success: true,
       data: {
-        categories,
+        categories: filteredCategories,
         pagination: {
           currentPage: parseInt(page),
           totalPages: Math.ceil(total / parseInt(limit)),
@@ -112,8 +137,18 @@ export const getAllCategories = async (req, res) => {
 // @route   GET /api/categories/:id
 // @access  Private
 export const getCategoryById = async (req, res) => {
+  // Get user's selected store - required for filtering
+  const User = (await import('../models/User.js')).default;
+  const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+  if (!user.selectedStore) {
+    return res.status(400).json({
+      success: false,
+      message: 'Please select a store before viewing categories. Go to "Select Store" in the sidebar.'
+    });
+  }
   try {
-    const category = await Category.findById(req.params.id)
+    const category = await Category.findOne({ _id: req.params.id, store: user.selectedStore._id })
+      .populate('store', 'name code')
       .populate('createdBy', 'firstName lastName')
       .populate('updatedBy', 'firstName lastName');
 
@@ -124,9 +159,22 @@ export const getCategoryById = async (req, res) => {
       });
     }
 
+    // Filter embedded items by store
+    const categoryObj = category.toObject();
+    if (categoryObj.subcategories) {
+      categoryObj.subcategories = categoryObj.subcategories.map(subcategory => {
+        if (subcategory.items) {
+          subcategory.items = subcategory.items.filter(item => 
+            item.store && item.store.toString() === user.selectedStore._id.toString()
+          );
+        }
+        return subcategory;
+      });
+    }
+
     res.json({
       success: true,
-      data: category
+      data: categoryObj
     });
   } catch (error) {
     console.error('Error fetching category:', error);
@@ -156,15 +204,26 @@ export const createCategory = async (req, res) => {
 
     const { name, isActive = true } = req.body;
 
-    // Check if category name already exists
+    // Get user's selected store - required for categories
+    const User = (await import('../models/User.js')).default;
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before creating a category. Go to "Select Store" in the sidebar.'
+      });
+    }
+
+    // Check if category name already exists for this store
     const existingCategory = await Category.findOne({ 
-      name: { $regex: new RegExp(`^${name}$`, 'i') }
+      name: { $regex: new RegExp(`^${name}$`, 'i') },
+      store: user.selectedStore._id
     });
     
     if (existingCategory) {
       return res.status(400).json({
         success: false,
-        message: 'Category with this name already exists'
+        message: 'Category with this name already exists in this store'
       });
     }
 
@@ -172,6 +231,8 @@ export const createCategory = async (req, res) => {
     const categoryData = {
       name: name.trim(),
       isActive,
+      store: user.selectedStore._id,
+      storeName: user.selectedStore.name,
       subcategories: [],
       createdBy: req.user.id
     };
@@ -181,6 +242,7 @@ export const createCategory = async (req, res) => {
 
     // Populate the created category
     const populatedCategory = await Category.findById(category._id)
+      .populate('store', 'name code')
       .populate('createdBy', 'firstName lastName');
 
     res.status(201).json({
@@ -511,8 +573,20 @@ export const addItemToSubcategory = async (req, res) => {
       });
     }
 
+    // Get user's selected store - required for items
+    const UserModel = (await import('../models/User.js')).default;
+    const user = await UserModel.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before adding items. Go to "Select Store" in the sidebar.'
+      });
+    }
+
     const itemData = {
       ...req.body,
+      store: user.selectedStore._id,
+      storeName: user.selectedStore.name,
       createdBy: req.user.id
     };
 

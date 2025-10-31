@@ -8,6 +8,8 @@ import {
   deleteUser,
   activateUser,
   getUserStats,
+  setSelectedStore,
+  getSelectedStore,
   getUsersValidation,
   createUserValidation,
   updateUserValidation
@@ -19,6 +21,22 @@ const router = express.Router();
 // @desc    Get all users (with pagination and filtering)
 // @access  Private (Admin/Manager/Employee)
 router.get('/', authenticate, authorize('admin', 'manager', 'employee'), getUsersValidation, getUsers);
+
+// IMPORTANT: Specific routes must come before parameterized routes like /:id
+// @route   GET /api/users/stats/overview
+// @desc    Get user statistics overview
+// @access  Private (Admin/Manager only)
+router.get('/stats/overview', authenticate, authorize('admin', 'manager'), getUserStats);
+
+// @route   GET /api/users/selected-store
+// @desc    Get selected store for current user
+// @access  Private
+router.get('/selected-store', authenticate, getSelectedStore);
+
+// @route   PUT /api/users/selected-store
+// @desc    Set selected store for current user
+// @access  Private
+router.put('/selected-store', authenticate, setSelectedStore);
 
 // @route   GET /api/users/:id
 // @desc    Get user by ID
@@ -44,10 +62,5 @@ router.delete('/:id', authenticate, authorize('admin'), deleteUser);
 // @desc    Activate user account
 // @access  Private (Admin only)
 router.put('/:id/activate', authenticate, authorize('admin'), activateUser);
-
-// @route   GET /api/users/stats/overview
-// @desc    Get user statistics overview
-// @access  Private (Admin/Manager only)
-router.get('/stats/overview', authenticate, authorize('admin', 'manager'), getUserStats);
 
 export default router;

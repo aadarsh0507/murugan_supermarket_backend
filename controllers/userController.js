@@ -1,4 +1,5 @@
 import { body, validationResult, query } from 'express-validator';
+import mongoose from 'mongoose';
 import User from '../models/User.js';
 
 // Validation rules
@@ -117,6 +118,7 @@ export const getUsers = async (req, res) => {
     // Get users with pagination
     const users = await User.find(filter)
       .select('-password')
+      .populate('stores', 'name code')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -160,7 +162,9 @@ export const getUserById = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).select('-password');
+    const user = await User.findById(userId)
+      .select('-password')
+      .populate('stores', 'name code');
     
     if (!user) {
       return res.status(404).json({
@@ -197,7 +201,7 @@ export const createUser = async (req, res) => {
       });
     }
 
-    const { firstName, lastName, email, password, role, department, phone, address } = req.body;
+    const { firstName, lastName, email, password, role, department, phone, address, stores } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -217,10 +221,14 @@ export const createUser = async (req, res) => {
       role,
       department,
       phone,
-      address
+      address,
+      stores: stores || []
     });
 
     await user.save();
+
+    // Populate stores for response
+    await user.populate('stores', 'name code');
 
     // Remove password from response
     const userResponse = user.toObject();
@@ -269,8 +277,8 @@ export const updateUser = async (req, res) => {
 
     // Non-admin users can't update certain fields
     const allowedUpdates = isAdmin 
-      ? ['firstName', 'lastName', 'email', 'role', 'department', 'phone', 'address', 'isActive', 'preferences']
-      : ['firstName', 'lastName', 'phone', 'address', 'preferences'];
+      ? ['firstName', 'lastName', 'email', 'role', 'department', 'phone', 'address', 'isActive', 'preferences', 'stores', 'selectedStore']
+      : ['firstName', 'lastName', 'phone', 'address', 'preferences', 'selectedStore'];
 
     const updates = {};
     Object.keys(req.body).forEach(key => {
@@ -294,7 +302,10 @@ export const updateUser = async (req, res) => {
       userId,
       updates,
       { new: true, runValidators: true }
-    ).select('-password');
+    )
+      .select('-password')
+      .populate('stores', 'name code')
+      .populate('selectedStore', 'name code address');
 
     if (!user) {
       return res.status(404).json({
@@ -393,6 +404,100 @@ export const activateUser = async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Server error while activating user'
+    });
+  }
+};
+
+// @desc    Set selected store for current user
+// @route   PUT /api/users/selected-store
+// @access  Private
+export const setSelectedStore = async (req, res) => {
+  try {
+    const { storeId } = req.body;
+    const userId = req.user._id;
+
+    // Validate storeId
+    if (!storeId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Store ID is required'
+      });
+    }
+
+    // Verify store exists
+    const Store = mongoose.model('Store');
+    const store = await Store.findById(storeId);
+    if (!store) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Store not found'
+      });
+    }
+
+    // Update user's selected store
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { selectedStore: storeId },
+      { new: true, runValidators: true }
+    )
+      .select('-password')
+      .populate('selectedStore', 'name code address');
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Selected store updated successfully',
+      data: {
+        user,
+        selectedStore: user.selectedStore
+      }
+    });
+  } catch (error) {
+    console.error('Set selected store error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while setting selected store',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Get selected store for current user
+// @route   GET /api/users/selected-store
+// @access  Private
+export const getSelectedStore = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    const user = await User.findById(userId)
+      .select('selectedStore')
+      .populate('selectedStore', 'name code address phone email');
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      data: {
+        selectedStore: user.selectedStore
+      }
+    });
+  } catch (error) {
+    console.error('Get selected store error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while getting selected store',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

@@ -37,8 +37,10 @@ export const authenticate = async (req, res, next) => {
     // Verify token
     const decoded = verifyToken(token);
     
-    // Get user from database
-    const user = await User.findById(decoded.userId).select('-password');
+    // Get user from database with selectedStore populated
+    const user = await User.findById(decoded.userId)
+      .select('-password')
+      .populate('selectedStore', 'name code address');
     
     if (!user) {
       return res.status(401).json({
@@ -114,7 +116,9 @@ export const optionalAuth = async (req, res, next) => {
 
     if (token) {
       const decoded = verifyToken(token);
-      const user = await User.findById(decoded.userId).select('-password');
+      const user = await User.findById(decoded.userId)
+        .select('-password')
+        .populate('selectedStore', 'name code address');
       
       if (user && user.isActive) {
         req.user = user;

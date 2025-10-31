@@ -128,6 +128,16 @@ const billSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  store: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    required: true
+  },
+  storeName: {
+    type: String,
+    required: true,
+    trim: true
   }
 }, {
   timestamps: true,
