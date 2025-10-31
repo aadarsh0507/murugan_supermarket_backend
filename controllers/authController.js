@@ -222,7 +222,9 @@ export const login = async (req, res) => {
     const { email, password, rememberMe } = req.body;
 
     // Find user and include password for comparison
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email })
+      .select('+password')
+      .populate('selectedStore', 'name code address');
     
     if (!user) {
       return res.status(401).json({
@@ -259,7 +261,7 @@ export const login = async (req, res) => {
       { expiresIn: tokenExpiry }
     );
 
-    // Remove password from response
+    // Remove password from response and ensure selectedStore is populated
     const userResponse = user.toObject();
     delete userResponse.password;
 

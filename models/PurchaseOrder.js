@@ -67,6 +67,11 @@ const purchaseOrderSchema = new mongoose.Schema({
     ref: 'Store',
     required: true
   },
+  storeName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   orderDate: {
     type: Date,
     default: Date.now,

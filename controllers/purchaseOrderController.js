@@ -3,6 +3,7 @@ import Category from '../models/Category.js';
 import Item from '../models/Item.js';
 import Barcode from '../models/Barcode.js';
 import Store from '../models/Store.js';
+import User from '../models/User.js';
 import { validationResult } from 'express-validator';
 
 // @desc    Get all purchase orders
@@ -21,7 +22,16 @@ export const getAllPurchaseOrders = async (req, res) => {
       endDate = ''
     } = req.query;
 
-    // Build query
+    // Get user's selected store - required for filtering (unless admin explicitly filters by storeId)
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore && !storeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before viewing purchase orders. Go to "Select Store" in the sidebar.'
+      });
+    }
+
+    // Build query - use selected store by default, or allow admin to filter by specific store
     const query = {};
     
     if (search) {
@@ -36,8 +46,11 @@ export const getAllPurchaseOrders = async (req, res) => {
       query.supplier = supplierId;
     }
 
+    // Store filtering - use provided storeId or default to selected store
     if (storeId) {
       query.store = storeId;
+    } else if (user.selectedStore) {
+      query.store = user.selectedStore._id;
     }
 
     // Date filtering
@@ -285,6 +298,91 @@ export const createPurchaseOrder = async (req, res) => {
       }
     }
 
+    // Get user's selected store - required for purchase orders and batch validation
+    let storeId = req.body.store;
+    let storeName = req.body.storeName;
+    
+    if (!storeId) {
+      // If store not provided in body, use user's selected store
+      const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+      if (!user.selectedStore) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please select a store before creating a purchase order. Go to "Select Store" in the sidebar.'
+        });
+      }
+      storeId = user.selectedStore._id;
+      storeName = user.selectedStore.name;
+    } else if (!storeName) {
+      // If store ID is provided but name is not, fetch it
+      const Store = (await import('../models/Store.js')).default;
+      const store = await Store.findById(storeId);
+      if (store) {
+        storeName = store.name;
+      }
+    }
+
+    // Check if batch numbers already exist in the database for the same items
+    if (enrichedItems.length > 0 && storeId) {
+      for (const item of enrichedItems) {
+        if (item.sku && item.batchNumber) {
+          const batchNumber = String(item.batchNumber).trim().toUpperCase();
+          
+          if (batchNumber !== '') {
+            // Check standalone Item model
+            const dbItem = await Item.findOne({ sku: item.sku, store: storeId });
+            
+            if (dbItem && dbItem.batches && dbItem.batches.length > 0) {
+              const existingBatch = dbItem.batches.find(
+                batch => String(batch.batchNumber).trim().toUpperCase() === batchNumber
+              );
+              
+              if (existingBatch) {
+                return res.status(400).json({
+                  success: false,
+                  message: `Batch number '${batchNumber}' for item '${item.itemName || item.sku}' already exists and has been updated. Please use a different batch number.`,
+                  errors: [
+                    {
+                      msg: `Batch number '${batchNumber}' for item '${item.itemName || item.sku}' already exists in the database`,
+                      path: 'items.batchNumber'
+                    }
+                  ]
+                });
+              }
+            }
+            
+            // Check embedded items in Category model
+            const categories = await Category.find({ store: storeId });
+            
+            for (const category of categories) {
+              for (const subcategory of category.subcategories) {
+                const embeddedItem = subcategory.items.find(embItem => embItem.sku === item.sku);
+                
+                if (embeddedItem && embeddedItem.batches && embeddedItem.batches.length > 0) {
+                  const existingBatch = embeddedItem.batches.find(
+                    batch => String(batch.batchNumber).trim().toUpperCase() === batchNumber
+                  );
+                  
+                  if (existingBatch) {
+                    return res.status(400).json({
+                      success: false,
+                      message: `Batch number '${batchNumber}' for item '${item.itemName || item.sku}' already exists and has been updated. Please use a different batch number.`,
+                      errors: [
+                        {
+                          msg: `Batch number '${batchNumber}' for item '${item.itemName || item.sku}' already exists in the database`,
+                          path: 'items.batchNumber'
+                        }
+                      ]
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Generate PO number
     const poNumber = await PurchaseOrder.generatePONumber();
 
@@ -292,6 +390,8 @@ export const createPurchaseOrder = async (req, res) => {
       poNumber,
       ...req.body,
       items: enrichedItems,
+      store: storeId, // Ensure store is set
+      storeName: storeName, // Ensure store name is set
       createdBy: req.user.id
     };
 
@@ -413,7 +513,7 @@ export const createPurchaseOrder = async (req, res) => {
 
     // Generate barcodes for each item quantity
     const store = await Store.findById(purchaseOrder.store);
-    const storeName = store?.name || 'Murugan Supermarket';
+    const barcodeStoreName = store?.name || purchaseOrder.storeName || 'Murugan Supermarket';
     
     for (const poItem of purchaseOrder.items) {
       if (poItem.sku && poItem.quantity > 0) {
@@ -427,7 +527,7 @@ export const createPurchaseOrder = async (req, res) => {
             itemSku: poItem.sku,
             itemName: poItem.itemName,
             store: purchaseOrder.store,
-            storeName: storeName,
+            storeName: barcodeStoreName,
             expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
             batchNumber: poItem.batchNumber || null,
             createdBy: req.user.id
@@ -727,7 +827,7 @@ export const regeneratePurchaseOrderBarcodes = async (req, res) => {
     });
 
     // Generate new barcodes
-    const storeName = purchaseOrder.store?.name || 'Murugan Supermarket';
+    const barcodeStoreName = purchaseOrder.store?.name || purchaseOrder.storeName || 'Murugan Supermarket';
     
     for (const poItem of purchaseOrder.items) {
       if (poItem.sku && poItem.quantity > 0) {
@@ -741,7 +841,7 @@ export const regeneratePurchaseOrderBarcodes = async (req, res) => {
             itemSku: poItem.sku,
             itemName: poItem.itemName,
             store: purchaseOrder.store._id || purchaseOrder.store,
-            storeName: storeName,
+            storeName: barcodeStoreName,
             expiryDate: poItem.expiryDate ? new Date(poItem.expiryDate) : null,
             batchNumber: poItem.batchNumber || null,
             createdBy: req.user.id

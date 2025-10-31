@@ -91,6 +91,15 @@ const userSchema = new mongoose.Schema({
         default: true
       }
     }
+  },
+  stores: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store'
+  }],
+  selectedStore: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    default: null
   }
 }, {
   timestamps: true,
@@ -107,6 +116,7 @@ userSchema.virtual('fullName').get(function() {
 userSchema.index({ role: 1 });
 userSchema.index({ department: 1 });
 userSchema.index({ isActive: 1 });
+userSchema.index({ stores: 1 });
 
 // Pre-save middleware to hash password
 userSchema.pre('save', async function(next) {

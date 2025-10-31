@@ -1,5 +1,6 @@
 import Bill from '../models/Bill.js';
 import Category from '../models/Category.js';
+import User from '../models/User.js';
 import { validationResult } from 'express-validator';
 
 // Create a new bill
@@ -43,11 +44,20 @@ export const createBill = async (req, res) => {
       paymentMethod
     } = req.body;
 
+    // Get user's selected store - required for bills
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before creating a bill. Go to "Select Store" in the sidebar.'
+      });
+    }
+
     // Validate items and update stock
     const itemUpdates = [];
     for (const item of items) {
-      // Find item by SKU in embedded subcategories
-      const categories = await Category.find({});
+      // Find item by SKU in embedded subcategories - filter by store
+      const categories = await Category.find({ store: user.selectedStore._id });
       let foundItem = null;
       let foundCategory = null;
       let foundSubcategory = null;
@@ -104,6 +114,8 @@ export const createBill = async (req, res) => {
       amountReturned,
       gstBreakdown,
       paymentMethod,
+      store: user.selectedStore._id,
+      storeName: user.selectedStore.name,
       createdBy: req.user.id
     });
 
@@ -140,7 +152,16 @@ export const getAllBills = async (req, res) => {
   try {
     const { page = 1, limit = 10, status, startDate, endDate, createdBy } = req.query;
     
-    const query = {};
+    // Get user's selected store - required for filtering
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before viewing bills. Go to "Select Store" in the sidebar.'
+      });
+    }
+    
+    const query = { store: user.selectedStore._id };
     if (status) query.status = status;
     
     // Role-based filtering: employee and cashier can only see their own bills
@@ -184,6 +205,7 @@ export const getAllBills = async (req, res) => {
 
     const bills = await Bill.find(query)
       .populate('createdBy', 'firstName lastName email')
+      .populate('store', 'name code')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
@@ -226,8 +248,18 @@ export const getAllBills = async (req, res) => {
 // Get bill by ID
 export const getBillById = async (req, res) => {
   try {
-    const bill = await Bill.findById(req.params.id)
-      .populate('createdBy', 'name email');
+    // Get user's selected store - required for filtering
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before viewing bills. Go to "Select Store" in the sidebar.'
+      });
+    }
+    
+    const bill = await Bill.findOne({ _id: req.params.id, store: user.selectedStore._id })
+      .populate('createdBy', 'firstName lastName email')
+      .populate('store', 'name code');
 
     if (!bill) {
       return res.status(404).json({

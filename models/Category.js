@@ -5,7 +5,7 @@ const batchSchema = new mongoose.Schema({
   batchNumber: {
     type: String,
     required: true,
-    trim: true
+   trim: true
   },
   hsnNumber: {
     type: String,
@@ -136,6 +136,16 @@ const itemSchema = new mongoose.Schema({
       default: false
     }
   }],
+  store: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    required: true
+  },
+  storeName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -208,6 +218,17 @@ const categorySchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  store: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    required: true,
+    index: true
+  },
+  storeName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   subcategories: [subcategorySchema],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -226,6 +247,9 @@ const categorySchema = new mongoose.Schema({
 
 // Virtual for total item count across all subcategories
 categorySchema.virtual('totalItemCount').get(function() {
+  if (!this.subcategories || !Array.isArray(this.subcategories)) {
+    return 0;
+  }
   return this.subcategories.reduce((total, subcategory) => {
     return total + (subcategory.items ? subcategory.items.length : 0);
   }, 0);
@@ -233,6 +257,9 @@ categorySchema.virtual('totalItemCount').get(function() {
 
 // Virtual for active item count
 categorySchema.virtual('activeItemCount').get(function() {
+  if (!this.subcategories || !Array.isArray(this.subcategories)) {
+    return 0;
+  }
   return this.subcategories.reduce((total, subcategory) => {
     if (!subcategory.items) return total;
     return total + subcategory.items.filter(item => item.isActive).length;
@@ -241,7 +268,10 @@ categorySchema.virtual('activeItemCount').get(function() {
 
 // Virtual for subcategory count
 categorySchema.virtual('subcategoryCount').get(function() {
-  return this.subcategories ? this.subcategories.length : 0;
+  if (!this.subcategories || !Array.isArray(this.subcategories)) {
+    return 0;
+  }
+  return this.subcategories.length;
 });
 
 // Pre-save middleware to generate slugs
@@ -320,6 +350,8 @@ categorySchema.methods.canDelete = function() {
 
 // Indexes for better performance
 categorySchema.index({ name: 1, isActive: 1 });
+categorySchema.index({ store: 1, isActive: 1 });
+categorySchema.index({ store: 1, name: 1 });
 categorySchema.index({ slug: 1 }, { unique: true, sparse: true });
 categorySchema.index({ 'subcategories.name': 1 });
 categorySchema.index({ 'subcategories.items.sku': 1 });

@@ -1,6 +1,8 @@
 import Item from '../models/Item.js';
 import Category from '../models/Category.js';
 import PurchaseOrder from '../models/PurchaseOrder.js';
+import Barcode from '../models/Barcode.js';
+import User from '../models/User.js';
 import { validationResult } from 'express-validator';
 import mongoose from 'mongoose';
 import path from 'path';
@@ -64,8 +66,17 @@ export const getAllItems = async (req, res) => {
       lowStock = false
     } = req.query;
 
+    // Get user's selected store - required for filtering
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before viewing items. Go to "Select Store" in the sidebar.'
+      });
+    }
+
     // Build query
-    const query = {};
+    const query = { store: user.selectedStore._id };
     
     if (search) {
       query.$or = [
@@ -102,6 +113,7 @@ export const getAllItems = async (req, res) => {
 
     // Execute query
     const items = await Item.find(query)
+      .populate('store', 'name code')
       .populate('subcategory', 'name level parent')
       .populate('createdBy', 'firstName lastName')
       .populate('updatedBy', 'firstName lastName')
@@ -149,7 +161,17 @@ export const getItemById = async (req, res) => {
       });
     }
 
-    const item = await Item.findById(id)
+    // Get user's selected store - required for filtering
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before viewing items. Go to "Select Store" in the sidebar.'
+      });
+    }
+
+    const item = await Item.findOne({ _id: id, store: user.selectedStore._id })
+      .populate('store', 'name code')
       .populate('subcategory', 'name level parent')
       .populate('createdBy', 'firstName lastName')
       .populate('updatedBy', 'firstName lastName');
@@ -212,47 +234,66 @@ export const createItem = async (req, res) => {
       expiryDate
     } = req.body;
 
-    // Validate subcategory exists and is a leaf category (level 2)
-    const subcategoryDoc = await Category.findById(subcategory);
-    if (!subcategoryDoc) {
+    // Get user's selected store - required for items
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
       return res.status(400).json({
         success: false,
-        message: 'Subcategory not found'
+        message: 'Please select a store before creating an item. Go to "Select Store" in the sidebar.'
       });
     }
 
-    if (subcategoryDoc.level !== 2) {
+    // Validate subcategory exists - subcategories are embedded in Category documents
+    // Search for the category that contains this subcategory within the selected store
+    const categories = await Category.find({ store: user.selectedStore._id });
+    let foundSubcategory = null;
+    let parentCategory = null;
+    
+    for (const category of categories) {
+      if (category.subcategories && category.subcategories.length > 0) {
+        const subcat = category.subcategories.id(subcategory);
+        if (subcat) {
+          foundSubcategory = subcat;
+          parentCategory = category;
+          break;
+        }
+      }
+    }
+
+    if (!foundSubcategory) {
       return res.status(400).json({
         success: false,
-        message: 'Items can only be added to subcategories (level 2 categories)'
+        message: 'Subcategory not found in the selected store'
       });
     }
 
-    // Check if SKU already exists
-    const existingItem = await Item.findOne({ sku });
+    // Check if SKU already exists for this store
+    const existingItem = await Item.findOne({ sku, store: user.selectedStore._id });
     if (existingItem) {
       return res.status(400).json({
         success: false,
-        message: 'Item with this SKU already exists'
+        message: 'Item with this SKU already exists in this store'
       });
     }
 
     // Check if barcode already exists (if provided)
     if (barcode) {
-      const existingBarcode = await Item.findOne({ barcode });
+      const existingBarcode = await Item.findOne({ barcode, store: user.selectedStore._id });
       if (existingBarcode) {
         return res.status(400).json({
           success: false,
-          message: 'Item with this barcode already exists'
+          message: 'Item with this barcode already exists in this store'
         });
       }
     }
 
+    // Use the parent category ID since Item.subcategory references Category document
+    // Subcategories are embedded, so we reference the parent category
     const itemData = {
       name,
       sku,
       description,
-      subcategory,
+      subcategory: parentCategory._id, // Reference to parent Category document
       price,
       cost,
       stock: stock || 0,
@@ -268,6 +309,8 @@ export const createItem = async (req, res) => {
       isDigital: isDigital || false,
       requiresPrescription: requiresPrescription || false,
       expiryDate,
+      store: user.selectedStore._id,
+      storeName: user.selectedStore.name,
       createdBy: req.user.id
     };
 
@@ -276,7 +319,8 @@ export const createItem = async (req, res) => {
 
     // Populate the created item
     await item.populate([
-      { path: 'subcategory', select: 'name level parent' },
+      { path: 'store', select: 'name code' },
+      { path: 'subcategory', select: 'name level parent store storeName', options: { virtuals: false } },
       { path: 'createdBy', select: 'firstName lastName' }
     ]);
 
@@ -622,15 +666,25 @@ export const getItemStats = async (req, res) => {
 // @access  Private
 export const getStockWithBatches = async (req, res) => {
   try {
-    const { sku = '', search = '', categoryId = '' } = req.query;
+    const { sku = '', search = '', categoryId = '', storeId = '' } = req.query;
 
-    // Get all purchase orders to lookup expiry dates
-    const purchaseOrders = await PurchaseOrder.find({})
-      .select('poNumber items');
+    // Get purchase orders filtered by store if storeId provided
+    const poQuery = {};
+    if (storeId) {
+      poQuery.store = storeId;
+    }
     
-    // Create a map of SKU + Batch Number + PO Number -> expiryDate
+    // Get all purchase orders to lookup expiry dates
+    const purchaseOrders = await PurchaseOrder.find(poQuery)
+      .select('poNumber items store');
+    
+    // Create a map of SKU + Batch Number + PO Number -> expiryDate and store
     const expiryDateMap = new Map();
+    const storeMap = new Map(); // Map PO number to store ID
     purchaseOrders.forEach(po => {
+      if (po.store) {
+        storeMap.set(po.poNumber, po.store.toString());
+      }
       if (po.items && Array.isArray(po.items)) {
         po.items.forEach(item => {
           if (item.sku && item.batchNumber && item.expiryDate) {
@@ -640,6 +694,20 @@ export const getStockWithBatches = async (req, res) => {
         });
       }
     });
+    
+    // If storeId is provided, get barcodes for that store to count actual stock
+    let storeStockMap = new Map(); // Map: `${sku}_${batchNumber}` -> quantity
+    if (storeId) {
+      const barcodes = await Barcode.find({ 
+        store: storeId,
+        isUsed: false 
+      }).select('itemSku batchNumber');
+      
+      barcodes.forEach(barcode => {
+        const key = `${barcode.itemSku}_${barcode.batchNumber || 'NO_BATCH'}`;
+        storeStockMap.set(key, (storeStockMap.get(key) || 0) + 1);
+      });
+    }
 
     // Get all items from standalone Item model
     const query = {};
@@ -720,17 +788,30 @@ export const getStockWithBatches = async (req, res) => {
           expiryDate = expiryDateMap.get(key) || null;
         }
         
+        // If storeId is provided, use actual stock from barcodes, otherwise use batch quantity
+        let batchQuantity = batch.quantity || 0;
+        if (storeId) {
+          const stockKey = `${item.sku}_${batch.batchNumber || 'NO_BATCH'}`;
+          const actualStock = storeStockMap.get(stockKey);
+          // Only include batches that have stock in this store
+          if (actualStock === undefined) {
+            return null; // Skip batches not in this store
+          }
+          batchQuantity = actualStock;
+        }
+        
         return {
           ...itemData,
           batchNumber: batch.batchNumber || 'N/A',
-          batchQuantity: batch.quantity || 0,
+          batchQuantity: batchQuantity,
           purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
           purchaseDate: batch.purchaseDate || null,
           costPrice: batch.costPrice || 0,
           hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
-          expiryDate: expiryDate
+          expiryDate: expiryDate,
+          storeId: storeId || null
         };
-      });
+      }).filter(b => b !== null); // Remove null entries
     });
 
     // Format embedded items
@@ -768,17 +849,30 @@ export const getStockWithBatches = async (req, res) => {
           expiryDate = expiryDateMap.get(key) || null;
         }
         
+        // If storeId is provided, use actual stock from barcodes, otherwise use batch quantity
+        let batchQuantity = batch.quantity || 0;
+        if (storeId) {
+          const stockKey = `${item.sku}_${batch.batchNumber || 'NO_BATCH'}`;
+          const actualStock = storeStockMap.get(stockKey);
+          // Only include batches that have stock in this store
+          if (actualStock === undefined) {
+            return null; // Skip batches not in this store
+          }
+          batchQuantity = actualStock;
+        }
+        
         return {
           ...itemData,
           batchNumber: batch.batchNumber || 'N/A',
-          batchQuantity: batch.quantity || 0,
+          batchQuantity: batchQuantity,
           purchaseOrderNumber: batch.purchaseOrderNumber || 'N/A',
           purchaseDate: batch.purchaseDate || null,
           costPrice: batch.costPrice || 0,
           hsnNumber: batch.hsnNumber || item.hsnCode || 'N/A',
-          expiryDate: expiryDate
+          expiryDate: expiryDate,
+          storeId: storeId || null
         };
-      });
+      }).filter(b => b !== null); // Remove null entries
     });
 
     // Combine and sort
