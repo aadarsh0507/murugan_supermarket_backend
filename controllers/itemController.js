@@ -231,6 +231,7 @@ export const createItem = async (req, res) => {
       isActive,
       isDigital,
       requiresPrescription,
+      isBOGO,
       expiryDate
     } = req.body;
 
@@ -308,6 +309,7 @@ export const createItem = async (req, res) => {
       isActive: isActive !== undefined ? isActive : true,
       isDigital: isDigital || false,
       requiresPrescription: requiresPrescription || false,
+      isBOGO: isBOGO || false,
       expiryDate,
       store: user.selectedStore._id,
       storeName: user.selectedStore.name,
@@ -363,10 +365,76 @@ export const updateItem = async (req, res) => {
       });
     }
 
-    console.log('Update embedded item - Looking for item with ID:', req.params.id);
-    console.log('Update embedded item - Request body:', req.body);
+    console.log('Update item - Looking for item with ID:', req.params.id);
+    console.log('Update item - Request body:', req.body);
 
-    // Since items are embedded in categories, we need to find them there
+    // Get user's selected store
+    const user = await User.findById(req.user.id).select('selectedStore').populate('selectedStore');
+    if (!user.selectedStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a store before updating an item.'
+      });
+    }
+
+    // First, try to find the item as a standalone document
+    let standaloneItem = await Item.findOne({ _id: req.params.id, store: user.selectedStore._id });
+    
+    if (standaloneItem) {
+      // Handle standalone Item document
+      console.log('Update item - Found standalone item:', standaloneItem.name);
+      
+      // Process images if they are base64 strings
+      if (req.body.images && Array.isArray(req.body.images)) {
+        const processedImages = [];
+        for (let k = 0; k < req.body.images.length; k++) {
+          const img = req.body.images[k];
+          if (img.url && img.url.startsWith('data:image')) {
+            try {
+              const fileUrl = await saveBase64Image(img.url, req.params.id, k);
+              processedImages.push({
+                url: fileUrl,
+                alt: img.alt || standaloneItem.name || 'Item image',
+                isPrimary: img.isPrimary || false
+              });
+              console.log(`Saved image ${k} to: ${fileUrl}`);
+            } catch (error) {
+              console.error(`Error saving image ${k}:`, error);
+              processedImages.push(img);
+            }
+          } else {
+            processedImages.push(img);
+          }
+        }
+        req.body.images = processedImages;
+      }
+
+      // Update the item with all fields from req.body (including isBOGO)
+      Object.keys(req.body).forEach(key => {
+        if (req.body[key] !== undefined) {
+          standaloneItem[key] = req.body[key];
+        }
+      });
+      standaloneItem.updatedBy = req.user.id;
+      
+      await standaloneItem.save();
+
+      // Populate before sending response
+      await standaloneItem.populate([
+        { path: 'store', select: 'name code' },
+        { path: 'subcategory', select: 'name level parent store storeName', options: { virtuals: false } },
+        { path: 'createdBy', select: 'firstName lastName' },
+        { path: 'updatedBy', select: 'firstName lastName' }
+      ]);
+
+      return res.json({
+        success: true,
+        message: 'Item updated successfully',
+        data: standaloneItem
+      });
+    }
+
+    // Fallback: Since items might be embedded in categories, we need to find them there
     // First, try to find the item in any category/subcategory
     const categories = await Category.find({
       $or: [
@@ -430,8 +498,15 @@ export const updateItem = async (req, res) => {
                   req.body.images = processedImages;
                 }
 
-                // Update the item
-                Object.assign(item, req.body);
+                // Update the item - explicitly handle isBOGO and all other fields
+                Object.keys(req.body).forEach(key => {
+                  if (req.body[key] !== undefined) {
+                    item[key] = req.body[key];
+                  }
+                });
+                // Mark the subcategory and category as modified to ensure save
+                subcategory.markModified('items');
+                category.markModified('subcategories');
                 updatedItem = item;
                 updatedCategory = category;
                 break;
@@ -478,8 +553,14 @@ export const updateItem = async (req, res) => {
               req.body.images = processedImages;
             }
 
-            // Update the item
-            Object.assign(item, req.body);
+            // Update the item - explicitly handle isBOGO and all other fields
+            Object.keys(req.body).forEach(key => {
+              if (req.body[key] !== undefined) {
+                item[key] = req.body[key];
+              }
+            });
+            // Mark the category as modified to ensure save
+            category.markModified('items');
             updatedItem = item;
             updatedCategory = category;
             break;

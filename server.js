@@ -21,6 +21,8 @@ import supplierRoutes from './routes/suppliers.js';
 import purchaseOrderRoutes from './routes/purchaseOrders.js';
 import barcodeRoutes from './routes/barcodes.js';
 import dashboardRoutes from './routes/dashboard.js';
+import creditRoutes from './routes/credits.js';
+import customerCreditRoutes from './routes/customerCredits.js';
 
 // Load environment variables
 dotenv.config();
@@ -105,6 +107,8 @@ app.use('/api/suppliers', supplierRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
 app.use('/api/barcodes', barcodeRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/credits', creditRoutes);
+app.use('/api/customer-credits', customerCreditRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

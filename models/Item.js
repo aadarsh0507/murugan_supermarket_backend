@@ -138,6 +138,11 @@ const itemSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isBOGO: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   expiryDate: {
     type: Date
   },
