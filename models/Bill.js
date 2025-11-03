@@ -116,8 +116,13 @@ const billSchema = new mongoose.Schema({
   }],
   paymentMethod: {
     type: String,
-    enum: ['cash', 'card', 'upi', 'other'],
+    enum: ['cash', 'card', 'upi', 'other', 'credit'],
     default: 'cash'
+  },
+  isCredit: {
+    type: Boolean,
+    default: false,
+    index: true
   },
   status: {
     type: String,
@@ -147,6 +152,7 @@ const billSchema = new mongoose.Schema({
 
 // Virtual for bill date
 billSchema.virtual('billDate').get(function() {
+  if (!this.createdAt) return '';
   return this.createdAt.toLocaleDateString('en-GB', { 
     day: '2-digit', 
     month: 'short', 
@@ -156,6 +162,7 @@ billSchema.virtual('billDate').get(function() {
 
 // Virtual for bill time
 billSchema.virtual('billTime').get(function() {
+  if (!this.createdAt) return '';
   return this.createdAt.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
 });
 

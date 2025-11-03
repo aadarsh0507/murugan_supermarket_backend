@@ -123,6 +123,11 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   receivedDate: Date,
   invoiceNumber: String,
+  isCredit: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   isActive: {
     type: Boolean,
     default: true
