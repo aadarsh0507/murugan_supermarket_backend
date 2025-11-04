@@ -40,11 +40,11 @@ export const getAllCredits = async (req, res) => {
       ];
     }
     
-    if (status) {
+    if (status && status !== 'all') {
       query.status = status;
     }
 
-    if (supplierId) {
+    if (supplierId && supplierId !== 'all') {
       query.supplier = supplierId;
     }
 
