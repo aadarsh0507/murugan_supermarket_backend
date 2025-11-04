@@ -68,8 +68,30 @@ export const getAllCategories = async (req, res) => {
       });
     }
 
-    // Build query
-    const query = { store: user.selectedStore._id };
+    const storeId = user.selectedStore._id;
+    const storeIdStr = storeId.toString();
+    console.log(`[getAllCategories] User selected store: ${storeId} (${user.selectedStore.name})`);
+
+    // Also check all categories for debugging
+    const allCategoriesCount = await Category.countDocuments({});
+    console.log(`[getAllCategories] Total categories in DB: ${allCategoriesCount}`);
+    
+    // Check what stores are in the categories
+    const sampleCategories = await Category.find({}).limit(5).select('name store');
+    console.log(`[getAllCategories] Sample categories:`, sampleCategories.map(c => ({
+      name: c.name,
+      store: c.store?.toString() || c.store,
+      storeType: typeof c.store
+    })));
+
+    // Build query - handle both ObjectId and string formats for store
+    // Try matching by ObjectId first, then by string
+    let query = {
+      $or: [
+        { store: storeId },
+        { store: storeIdStr }
+      ]
+    };
     
     if (search) {
       query.name = { $regex: search, $options: 'i' };
@@ -77,6 +99,22 @@ export const getAllCategories = async (req, res) => {
     
     if (isActive !== undefined) {
       query.isActive = isActive === 'true' || isActive === true;
+    }
+    
+    // Check how many categories match this query
+    const matchingCount = await Category.countDocuments(query);
+    console.log(`[getAllCategories] Categories matching store filter: ${matchingCount}`);
+    
+    // If no categories match, try without store filter (temporary - for debugging)
+    if (matchingCount === 0) {
+      console.log(`[getAllCategories] WARNING: No categories found for store ${storeIdStr}. Showing all categories.`);
+      query = {};
+      if (search) {
+        query.name = { $regex: search, $options: 'i' };
+      }
+      if (isActive !== undefined) {
+        query.isActive = isActive === 'true' || isActive === true;
+      }
     }
 
     // Calculate pagination
@@ -92,16 +130,33 @@ export const getAllCategories = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit));
 
-    // Filter embedded items by store (items already have store field)
+    // Since categories are already filtered by store, items within should match
+    // But we'll still filter items to be safe (in case of data inconsistencies)
+    // storeIdStr is already defined above
     const filteredCategories = categories.map(category => {
       const categoryObj = category.toObject();
       // Filter items in each subcategory by store
       if (categoryObj.subcategories) {
         categoryObj.subcategories = categoryObj.subcategories.map(subcategory => {
-          if (subcategory.items) {
-            subcategory.items = subcategory.items.filter(item => 
-              item.store && item.store.toString() === user.selectedStore._id.toString()
-            );
+          if (subcategory.items && subcategory.items.length > 0) {
+            const filteredItems = subcategory.items.filter(item => {
+              // Handle both string and ObjectId formats
+              if (!item.store) {
+                // If item has no store field, include it (legacy data)
+                return true;
+              }
+              const itemStoreId = typeof item.store === 'string' 
+                ? item.store 
+                : item.store.toString();
+              return itemStoreId === storeIdStr;
+            });
+            
+            // Log if filtering removed items (for debugging)
+            if (filteredItems.length !== subcategory.items.length) {
+              console.log(`Filtered ${subcategory.items.length - filteredItems.length} items from ${subcategory.name} (store mismatch)`);
+            }
+            
+            subcategory.items = filteredItems;
           }
           return subcategory;
         });
@@ -110,6 +165,13 @@ export const getAllCategories = async (req, res) => {
     });
 
     const total = await Category.countDocuments(query);
+
+    // Debug logging
+    console.log(`Found ${filteredCategories.length} categories for store ${user.selectedStore.name}`);
+    filteredCategories.forEach(cat => {
+      const totalItems = cat.subcategories?.reduce((sum, sub) => sum + (sub.items?.length || 0), 0) || 0;
+      console.log(`  - ${cat.name}: ${cat.subcategories?.length || 0} subcategories, ${totalItems} items`);
+    });
 
     res.json({
       success: true,
