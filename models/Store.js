@@ -1,85 +1,87 @@
-import mongoose from 'mongoose';
+import { DataTypes } from 'sequelize';
+import { sequelize } from '../db/index.js';
 
-const storeSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, 'Store name is required'],
-    trim: true,
-    maxlength: [100, 'Store name cannot exceed 100 characters']
-  },
-  code: {
-    type: String,
-    required: [true, 'Store code is required'],
-    unique: true,
-    trim: true,
-    uppercase: true,
-    maxlength: [20, 'Store code cannot exceed 20 characters']
-  },
-  address: {
-    street: {
-      type: String,
-      trim: true,
-      maxlength: [200, 'Street address cannot exceed 200 characters']
+const Store = sequelize.define(
+  'Store',
+  {
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true
     },
-    city: {
-      type: String,
-      trim: true,
-      maxlength: [50, 'City cannot exceed 50 characters']
+    storeCode: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      unique: true,
+      field: 'store_code'
     },
-    state: {
-      type: String,
-      trim: true,
-      maxlength: [50, 'State cannot exceed 50 characters']
+    name: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      field: 'name'
     },
-    zipCode: {
-      type: String,
-      trim: true,
-      maxlength: [10, 'Zip code cannot exceed 10 characters']
+    phone: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      field: 'phone'
+    },
+    email: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'email'
+    },
+    addressStreet: {
+      type: DataTypes.STRING(200),
+      allowNull: true,
+      field: 'address_street'
+    },
+    addressCity: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      field: 'address_city'
+    },
+    addressState: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      field: 'address_state'
+    },
+    addressZipCode: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+      field: 'address_zip_code'
+    },
+    addressCountry: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: 'India',
+      field: 'address_country'
+    },
+    isActive: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: 'is_active',
+      get() {
+        const rawValue = this.getDataValue('isActive');
+        return Boolean(rawValue);
+      },
+      set(value) {
+        this.setDataValue('isActive', value ? 1 : 0);
+      }
+    },
+    createdBy: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: true,
+      field: 'created_by'
     }
   },
-  phone: {
-    type: String,
-    trim: true,
-    match: [/^[\+]?[1-9][\d]{0,15}$/, 'Please enter a valid phone number']
-  },
-  email: {
-    type: String,
-    lowercase: true,
-    trim: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
-  },
-  managerName: {
-    type: String,
-    trim: true,
-    maxlength: [100, 'Manager name cannot exceed 100 characters']
-  },
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  updatedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+  {
+    tableName: 'stores',
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
   }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
+);
 
-// Indexes for better performance
-storeSchema.index({ name: 1, isActive: 1 });
-storeSchema.index({ isActive: 1 });
-
-// Static method to find active stores
-storeSchema.statics.findActiveStores = function () {
-  return this.find({ isActive: true });
-};
-
-export default mongoose.model('Store', storeSchema);
+export default Store;
 

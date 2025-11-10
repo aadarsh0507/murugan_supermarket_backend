@@ -1,66 +1,29 @@
 import express from 'express';
-import { authenticate, authorize } from '../middleware/auth.js';
+import { body } from 'express-validator';
+import { protect } from '../middleware/auth.js';
 import {
-  getUsers,
-  getUserById,
-  createUser,
-  updateUser,
-  deleteUser,
-  activateUser,
-  getUserStats,
-  setSelectedStore,
-  getSelectedStore,
-  getUsersValidation,
-  createUserValidation,
-  updateUserValidation
-} from '../controllers/userController.js';
+    getSelectedStore,
+    setSelectedStore
+} from '../controllers/userSelectedStoreController.js';
 
 const router = express.Router();
 
-// @route   GET /api/users
-// @desc    Get all users (with pagination and filtering)
-// @access  Private (Admin/Manager/Employee)
-router.get('/', authenticate, authorize('admin', 'manager', 'employee'), getUsersValidation, getUsers);
+const selectedStoreValidation = [
+    body('storeId')
+        .optional({ nullable: true })
+        .custom((value) => {
+            if (value === null || value === '' || value === undefined) {
+                return true;
+            }
+            const numeric = Number(value);
+            if (Number.isInteger(numeric) && numeric > 0) {
+                return true;
+            }
+            throw new Error('Store ID must be a positive integer');
+        })
+];
 
-// IMPORTANT: Specific routes must come before parameterized routes like /:id
-// @route   GET /api/users/stats/overview
-// @desc    Get user statistics overview
-// @access  Private (Admin/Manager only)
-router.get('/stats/overview', authenticate, authorize('admin', 'manager'), getUserStats);
-
-// @route   GET /api/users/selected-store
-// @desc    Get selected store for current user
-// @access  Private
-router.get('/selected-store', authenticate, getSelectedStore);
-
-// @route   PUT /api/users/selected-store
-// @desc    Set selected store for current user
-// @access  Private
-router.put('/selected-store', authenticate, setSelectedStore);
-
-// @route   GET /api/users/:id
-// @desc    Get user by ID
-// @access  Private (Admin/Manager only, or user accessing their own profile)
-router.get('/:id', authenticate, getUserById);
-
-// @route   POST /api/users
-// @desc    Create a new user
-// @access  Private (Admin only)
-router.post('/', authenticate, authorize('admin'), createUserValidation, createUser);
-
-// @route   PUT /api/users/:id
-// @desc    Update user
-// @access  Private (Admin only, or user updating their own profile)
-router.put('/:id', authenticate, updateUserValidation, updateUser);
-
-// @route   DELETE /api/users/:id
-// @desc    Delete user (soft delete by setting isActive to false)
-// @access  Private (Admin only)
-router.delete('/:id', authenticate, authorize('admin'), deleteUser);
-
-// @route   PUT /api/users/:id/activate
-// @desc    Activate user account
-// @access  Private (Admin only)
-router.put('/:id/activate', authenticate, authorize('admin'), activateUser);
+router.get('/selected-store', protect, getSelectedStore);
+router.put('/selected-store', protect, selectedStoreValidation, setSelectedStore);
 
 export default router;

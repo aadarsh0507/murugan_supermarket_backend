@@ -1,10 +1,44 @@
 import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import {
+  getUserById
+} from '../repositories/userRepository.js';
+
+const parseCookieHeader = (cookieHeader = '') => {
+  return cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((acc, part) => {
+      const [key, ...rest] = part.split('=');
+      if (!key) return acc;
+      acc[key] = decodeURIComponent(rest.join('='));
+      return acc;
+    }, {});
+};
+
+const getTokenFromRequest = (req) => {
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    return req.headers.authorization.split(' ')[1];
+  }
+
+  if (req.cookies?.token) {
+    return req.cookies.token;
+  }
+
+  if (req.headers.cookie) {
+    const cookies = parseCookieHeader(req.headers.cookie);
+    if (cookies.token) {
+      return cookies.token;
+    }
+  }
+
+  return null;
+};
 
 // Generate JWT token
 export const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE || '7d'
+    expiresIn: '24h'
   });
 };
 
@@ -20,12 +54,7 @@ export const verifyToken = (token) => {
 // Authentication middleware
 export const authenticate = async (req, res, next) => {
   try {
-    let token;
-
-    // Check for token in headers
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
+    const token = getTokenFromRequest(req);
 
     if (!token) {
       return res.status(401).json({
@@ -34,15 +63,10 @@ export const authenticate = async (req, res, next) => {
       });
     }
 
-    // Verify token
     const decoded = verifyToken(token);
-    
-    // Get user from database with selectedStore and stores populated
-    const user = await User.findById(decoded.userId)
-      .select('-password')
-      .populate('selectedStore', 'name code address')
-      .populate('stores', 'name code address');
-    
+
+    const user = await getUserById(decoded.userId);
+
     if (!user) {
       return res.status(401).json({
         status: 'error',
@@ -57,7 +81,6 @@ export const authenticate = async (req, res, next) => {
       });
     }
 
-    // Add user to request object
     req.user = user;
     next();
   } catch (error) {
@@ -68,10 +91,8 @@ export const authenticate = async (req, res, next) => {
   }
 };
 
-// Alias for authenticate (commonly used name)
 export const protect = authenticate;
 
-// Authorization middleware
 export const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -80,20 +101,6 @@ export const authorize = (...roles) => {
         message: 'Authentication required.'
       });
     }
-
-    console.log('Authorization Debug:', {
-      userRole: req.user.role,
-      userRoleType: typeof req.user.role,
-      requiredRoles: roles,
-      rolesType: typeof roles,
-      rolesIncludes: roles.includes(req.user.role),
-      userObject: {
-        id: req.user._id,
-        email: req.user.email,
-        role: req.user.role,
-        department: req.user.department
-      }
-    });
 
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
@@ -106,22 +113,14 @@ export const authorize = (...roles) => {
   };
 };
 
-// Optional authentication middleware (doesn't fail if no token)
 export const optionalAuth = async (req, res, next) => {
   try {
-    let token;
-
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
+    const token = getTokenFromRequest(req);
 
     if (token) {
       const decoded = verifyToken(token);
-      const user = await User.findById(decoded.userId)
-        .select('-password')
-        .populate('selectedStore', 'name code address')
-        .populate('stores', 'name code address');
-      
+      const user = await getUserById(decoded.userId);
+
       if (user && user.isActive) {
         req.user = user;
       }
@@ -129,7 +128,6 @@ export const optionalAuth = async (req, res, next) => {
 
     next();
   } catch (error) {
-    // Continue without authentication
     next();
   }
 };

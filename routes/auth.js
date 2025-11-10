@@ -1,23 +1,13 @@
 import express from 'express';
-import { authenticate } from '../middleware/auth.js';
 import {
   register,
   login,
   logout,
-  getProfile,
-  updateProfile,
-  changePassword,
-  forgotPassword,
-  verifyOTP,
-  resetPassword,
   registerValidation,
   loginValidation,
-  profileUpdateValidation,
-  changePasswordValidation,
-  forgotPasswordValidation,
-  verifyOTPValidation,
-  resetPasswordValidation
+  getProfile
 } from '../controllers/authController.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -31,39 +21,9 @@ router.post('/register', registerValidation, register);
 // @access  Public
 router.post('/login', loginValidation, login);
 
-// @route   POST /api/auth/logout
-// @desc    Logout user (client-side token removal)
-// @access  Private
+router.get('/me', authenticate, getProfile);
 router.post('/logout', authenticate, logout);
 
-// @route   GET /api/auth/me
-// @desc    Get current user profile
-// @access  Private
-router.get('/me', authenticate, getProfile);
-
-// @route   PUT /api/auth/profile
-// @desc    Update user profile
-// @access  Private
-router.put('/profile', authenticate, profileUpdateValidation, updateProfile);
-
-// @route   PUT /api/auth/change-password
-// @desc    Change user password
-// @access  Private
-router.put('/change-password', authenticate, changePasswordValidation, changePassword);
-
-// @route   POST /api/auth/forgot-password
-// @desc    Send OTP to email for password reset
-// @access  Public
-router.post('/forgot-password', forgotPasswordValidation, forgotPassword);
-
-// @route   POST /api/auth/verify-otp
-// @desc    Verify OTP for password reset
-// @access  Public
-router.post('/verify-otp', verifyOTPValidation, verifyOTP);
-
-// @route   POST /api/auth/reset-password
-// @desc    Reset password with OTP
-// @access  Public
-router.post('/reset-password', resetPasswordValidation, resetPassword);
+// Additional auth endpoints are temporarily disabled to focus on login/register testing.
 
 export default router;

@@ -1,0 +1,15 @@
+name,sku,description,subcategory,price,cost,stock,minStock,maxStock,unit,weight,length,width,height,barcode,tags,isActive,isDigital,requiresPrescription,expiryDate
+Apple,FRU-APP-001,Fresh red apples from local farm,FRU-VEG-FRUITS,25.50,15.00,100,20,200,kg,0.15,5,5,5,1234567890123,organic fresh fruit,true,false,false,
+Banana,FRU-BAN-001,Yellow ripe bananas,FRU-VEG-FRUITS,18.00,10.00,150,30,300,kg,0.20,8,5,5,1234567890124,fruit healthy,true,false,false,
+Tomato,FRU-VEG-VEG001,Fresh red tomatoes,FRU-VEG-VEGETABLES,45.00,25.00,80,15,150,kg,0.30,6,6,6,1234567890125,vegetable fresh,true,false,false,
+Potato,FRU-VEG-VEG002,Organic potatoes,FRU-VEG-VEGETABLES,40.00,20.00,200,40,400,kg,0.50,8,8,8,1234567890126,vegetable organic,true,false,false,
+
+
+
+
+
+
+
+
+
+
